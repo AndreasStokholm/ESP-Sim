@@ -1,0 +1,33 @@
+# Host tests for the portable pod core. The crypto is mbedTLS, as on the
+# board: built here from ESP-IDF's copy.
+#   make -C test/host        builds and runs them
+CORE := ../../components/dashpod
+IDF_PATH ?= $(HOME)/esp/esp-idf
+MBED := $(IDF_PATH)/components/mbedtls/mbedtls
+OUT := ../../.cache/host-mbedtls
+
+SRCS := $(wildcard $(CORE)/src/*.c) host_io.c test_main.c test_o5.c
+CFLAGS ?= -O1 -g -fsanitize=address,undefined
+WARN := -Wall -Wextra -Werror -Wno-unused-parameter
+CFLAGS += -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -I$(CORE)/include -I. -I$(MBED)/include
+
+MBED_SRCS := $(wildcard $(MBED)/library/*.c)
+MBED_OBJS := $(patsubst $(MBED)/library/%.c,$(OUT)/%.o,$(MBED_SRCS))
+
+test: dash_tests
+	./dash_tests
+
+dash_tests: $(SRCS) $(wildcard $(CORE)/include/*.h) $(wildcard golden_*.h) host_io.h $(OUT)/libmbedcrypto.a
+	$(CC) $(CFLAGS) $(WARN) -o $@ $(SRCS) $(OUT)/libmbedcrypto.a -lpthread
+
+$(OUT)/%.o: $(MBED)/library/%.c
+	@mkdir -p $(OUT)
+	$(CC) -O2 -I$(MBED)/include -I$(MBED)/library -c $< -o $@
+
+$(OUT)/libmbedcrypto.a: $(MBED_OBJS)
+	ar rcs $@ $^
+
+clean:
+	rm -f dash_tests
+
+.PHONY: test clean

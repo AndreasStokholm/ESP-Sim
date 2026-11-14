@@ -1,0 +1,18 @@
+menu "ESP-Sim DASH pod"
+
+config ESPSIM_TZ
+    string "Time zone (POSIX TZ)"
+    default "UTC0"
+    help
+        The pod reports its activation date and time in this zone, as a
+        real pod reports the PDM's local time. Example: "CST6CDT,M3.2.0,M11.1.0".
+
+config ESPSIM_AP_SSID_PREFIX
+    string "Access point name prefix"
+    default "ESP-Sim-Pod"
+    help
+        With no Wi-Fi network saved, the board runs an access point named
+        this plus the end of its MAC address. Its password is printed on the
+        serial console at boot.
+
+endmenu
