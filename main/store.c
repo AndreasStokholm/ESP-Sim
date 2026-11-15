@@ -1,6 +1,6 @@
 /*
- * Non-volatile storage: the pod's state, so a reboot is the same pod, and
- * the Wi-Fi network the panel saved.
+ * Non-volatile storage: the pod's and the CGM's state, so a reboot is the
+ * same pod and sensor, and the Wi-Fi network the panel saved.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -67,4 +67,21 @@ void store_save_wifi(const char *ssid, const char *password)
         nvs_set_str(nvs, "wifi_pass", password);
     }
     nvs_commit(nvs);
+}
+
+bool store_load_cgm(cgm_state_t *st)
+{
+    size_t len = sizeof *st;
+    return nvs_get_blob(nvs, "cgm", st, &len) == ESP_OK && len == sizeof *st && st->version == CGM_STATE_VERSION;
+}
+
+void store_save_cgm(void *ctx, const cgm_state_t *st)
+{
+    esp_err_t err = nvs_set_blob(nvs, "cgm", st, sizeof *st);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "could not save the CGM state: %s", esp_err_to_name(err));
+    }
 }

@@ -1,11 +1,14 @@
-# ESP-Sim: an Omnipod DASH and Omnipod 5 pod simulator on the ESP32-S3
+# ESP-Sim: an Omnipod DASH and Omnipod 5 pod, and Dexcom G6 and G7 CGM, simulator on the ESP32-S3
 
-> **Test equipment only.** ESP-Sim pretends to be an insulin pod so that
-> controller apps (Loop, Trio and others using OmnipodKit) can be developed
-> and tested without a real pod. It delivers no insulin, and nothing it
-> reports reflects a real pod. Never use it — or an app paired to it — for
-> anyone's therapy. This is not medical advice; talk to your care team about
-> your own treatment.
+> **Test equipment only.** ESP-Sim pretends to be an insulin pod, and
+> optionally a CGM, so that controller apps (Loop, Trio and others using
+> OmnipodKit, CGMBLEKit and G7SensorKit) can be developed and tested without
+> real devices. It delivers no insulin, its glucose readings are made up, and
+> nothing it reports reflects a real device. Never use it — or an app paired
+> to it — for anyone's therapy. **Never let a phone that controls a real pump
+> or pod read the simulated CGM:** the app would dose insulin from made-up
+> numbers. This is not medical advice; talk to your care team about your own
+> treatment.
 
 This is a C port of the Go DASH simulator
 ([jeremybarnum/pod](https://github.com/jeremybarnum/pod) at
@@ -14,7 +17,8 @@ This is a C port of the Go DASH simulator
 protocol — pairing, EAP-AKA sessions, encrypted pod commands — and serves the
 same control panel, from a board that needs no Pi, no Linux and no Go.
 
-It can also be an Omnipod 5 pod: see [Omnipod 5](#omnipod-5) below.
+It can also be an Omnipod 5 pod, and at the same time a Dexcom G6 or G7:
+see [Omnipod 5](#omnipod-5) and [Dexcom G6 and G7](#dexcom-g6-and-g7) below.
 
 ## Hardware
 
@@ -89,8 +93,9 @@ is kept byte for byte: see the tests.
 
 | Path | What |
 |---|---|
+| `components/cgmsim/` | The simulated Dexcom G6 transmitter and G7 sensor, as portable C |
 | `components/dashpod/` | The pod, as portable C: crypto (AES-CCM, CMAC, X25519, Milenage; AES, SHA-256 and P-256 from mbedTLS), messages, link layer, pairing (DASH and Omnipod 5), EAP-AKA, commands, responses, state machine |
-| `main/` | The ESP32 side: NimBLE GATT and advertising (`ble.c`), NVS (`store.c`), Wi-Fi and the HTTP panel (`panel.c`, `panel.html`) |
+| `main/` | The ESP32 side: NimBLE GATT and advertising for both devices (`ble.c`), the CGM's clock and commands (`cgm_app.c`), NVS (`store.c`), Wi-Fi and the HTTP panel (`panel.c`, `panel.html`) |
 | `test/host/` | Host tests (macOS) |
 | `tools/golden/` | Generates `test/host/golden_dash.h` by running the upstream Go code |
 | `tools/o5golden/` | Generates `test/host/golden_o5.h` by running OmnipodKit's Omnipod 5 code |
@@ -156,6 +161,49 @@ inputs and writes `golden_o5.h`:
 ```bash
 tools/o5golden/gen.sh
 ```
+
+## Dexcom G6 and G7
+
+> **Use a test phone.** The CGM's readings are whatever the panel says. A
+> phone whose app reads them and also controls a real pump or pod would dose
+> real insulin from them.
+
+In the control panel's *CGM* card, start a new G6 transmitter or G7 sensor
+(or none, the default). The board then shows up as two Bluetooth devices: the
+pod, from its own address, and the CGM, from a random address of its own,
+named like a Dexcom (`DexcomXX` for a G6, `DXCMXX` for a G7). The phone can be
+connected to both at once.
+
+The CGM follows the code apps use: LoopKit's
+[CGMBLEKit](https://github.com/LoopKit/CGMBLEKit) (`776543f`) for the G6 and
+[G7SensorKit](https://github.com/LoopKit/G7SensorKit) (`a03a295`) for the G7.
+
+- **Readings** every 5 minutes, at the glucose and trend set in the panel (the
+  trend moves the value at each reading, between 40 and 400 mg/dL).
+- **Each reading** opens a minute of advertising. The phone connects, gets the
+  reading (and any it missed: backfill), and the CGM hangs up, as the real
+  ones do.
+- **No Dexcom app is needed.** Both apps normally watch the Dexcom app talk to
+  the sensor; the simulator sends the messages the Dexcom app's session would
+  produce. A G6 app can also log in itself (CGMBLEKit's active mode, with the
+  key made from the transmitter ID), start, stop and calibrate the sensor.
+- **No Bluetooth pairing.** The CGM reports itself bonded without asking the
+  phone to pair.
+- **Sensor life:** warm-up (2 hours for a G6, 27 minutes for a G7, which the
+  panel can skip), then 10 days (G6) or 10 days plus the 12-hour grace period
+  (G7).
+- **Testing the app:** set a state (failed, temporary issue, expired…), or
+  turn on signal loss to miss readings and see them backfilled after.
+
+Its JSON API: `GET /cgm`, and `POST /cgm` with
+`{"command": "cgmNew", "kind": 0|6|7, "id": "81AB7Q"}`,
+`{"command": "cgmGlucose", "glucose": 120, "trend": 10}` (tenths of mg/dL per
+minute), `{"command": "cgmState", "state": 0}` (0: automatic),
+`{"command": "cgmSignalLoss", "on": true}` or `{"command": "cgmSkipWarmup"}`.
+
+The host tests check its messages against the byte vectors in CGMBLEKit's and
+G7SensorKit's own tests, and run whole sessions (G7; G6 watched and G6 logged
+in) against a simulated phone.
 
 ## License
 

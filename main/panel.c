@@ -164,6 +164,35 @@ static esp_err_t post_command(httpd_req_t *req)
     return send_status(req);
 }
 
+/* ---- the CGM: GET /cgm, POST /cgm {"command": ...} ---------------------------- */
+
+static esp_err_t send_cgm(httpd_req_t *req)
+{
+    char json[768];
+    size_t n = cgm_app_status_json(json, sizeof json);
+    if (n == 0) {
+        return httpd_resp_send_500(req);
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, json, (ssize_t)n);
+}
+
+static esp_err_t post_cgm(httpd_req_t *req)
+{
+    char body[256];
+    if (read_body(req, body, sizeof body) < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad request body");
+        return ESP_OK;
+    }
+    const char *err = cgm_app_command(body);
+    if (err) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err);
+        return ESP_OK;
+    }
+    return send_cgm(req);
+}
+
 /* Reads a JSON string value ("key": "value") with \" and \\ escapes. */
 static bool json_string(const char *j, const char *key, char *out, size_t size)
 {
@@ -236,6 +265,8 @@ void panel_start(dash_pod_t *pod)
         {.uri = "/status", .method = HTTP_GET, .handler = send_status},
         {.uri = "/command", .method = HTTP_POST, .handler = post_command},
         {.uri = "/wifi", .method = HTTP_POST, .handler = post_wifi},
+        {.uri = "/cgm", .method = HTTP_GET, .handler = send_cgm},
+        {.uri = "/cgm", .method = HTTP_POST, .handler = post_cgm},
     };
     for (size_t i = 0; i < sizeof routes / sizeof routes[0]; i++) {
         httpd_register_uri_handler(server, &routes[i]);

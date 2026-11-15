@@ -663,6 +663,7 @@ static void test_end_to_end(void)
 }
 
 void test_o5_all(void);
+void test_cgm_all(void);
 
 int main(void)
 {
@@ -675,6 +676,7 @@ int main(void)
     test_golden_fragments();
     test_end_to_end();
     test_o5_all();
+    test_cgm_all();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

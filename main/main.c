@@ -126,6 +126,7 @@ void app_main(void)
     }
 
     ble_start();
+    cgm_app_start();
     panel_start(&pod);
     xTaskCreatePinnedToCore(pod_task, "pod", 12288, NULL, 5, NULL, tskNO_AFFINITY);
 }
