@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ESP-Sim</title>
+<title>Home | ESP-Sim</title>
 <style>
   :root { color-scheme: dark; --bg:#14161a; --card:#1d2026; --line:#2b2f37; --fg:#e8eaed; --mut:#9aa0aa; --accent:#4f9cf8; --ok:#43c06d; --warn:#e0a53b; --bad:#e2574c; }
   * { box-sizing:border-box; }
@@ -244,7 +244,7 @@
 <script>
 const $ = id=>document.getElementById(id);
 const cgmPage = location.pathname === '/cgm' || location.pathname === '/g7';
-if(cgmPage){ document.body.classList.add('cgm-page'); document.title = 'CGM'; $('navCgm').classList.add('active'); }
+if(cgmPage){ document.body.classList.add('cgm-page'); document.title = 'CGM | ESP-Sim'; $('navCgm').classList.add('active'); }
 else { $('navHome').classList.add('active'); }
 
 function say(t){ const el = cgmPage ? $('cmsg') : $('msg'); if(!el) return; el.textContent=t;
