@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ESP-Sim DASH pod</title>
+<title>ESP-Sim</title>
 <style>
   :root { color-scheme: dark; --bg:#14161a; --card:#1d2026; --line:#2b2f37; --fg:#e8eaed; --mut:#9aa0aa; --accent:#4f9cf8; --ok:#43c06d; --warn:#e0a53b; --bad:#e2574c; }
   * { box-sizing:border-box; }
@@ -120,11 +120,61 @@
   </section>
 
   <section class="card" aria-labelledby="h-type">
-    <h2 id="h-type">Pod type</h2>
-    <label for="typeIn">Simulate</label>
-    <select id="typeIn"><option value="0">Omnipod DASH</option><option value="1">Omnipod 5</option></select>
-    <div class="actions"><button class="danger" id="typeSet">Switch to a new pod of this type</button></div>
-    <div class="muted" style="margin-top:8px">Switching forgets the current pod. Omnipod 5 pairs with apps whose OmnipodKit supports it, such as Loop 3.14.7 and Trio 1.0 or later.</div>
+    <h2 id="h-type">Pump</h2>
+    <div class="row">
+      <div><label for="typeIn">Simulate</label>
+        <select id="typeIn"><option value="0">Omnipod DASH</option><option value="1">Omnipod 5</option><option value="2">YpsoPump</option></select></div>
+      <div id="fwBox"><label for="fwIn">YpsoPump firmware</label><select id="fwIn">
+        <option value="0">V05.02.03: encrypted, Control 1.4 (the validated pump)</option>
+        <option value="1">V35.01.00: encrypted, study firmware (_alt characteristics)</option>
+        <option value="2">V65.00.06: OPN, clear text, Control 1.0</option>
+        <option value="3">V03.00.00: OPN, clear text, Control 1.1</option>
+        <option value="4">V02.00.00: baseline, no Control service</option>
+      </select></div>
+    </div>
+    <div class="actions"><button class="danger" id="typeSet">Switch</button>
+      <label style="display:flex;gap:8px;align-items:center;margin:0;font-size:14px;color:var(--fg)"><input type="checkbox" id="fwFresh"> as a new YpsoPump (new key, serial and history)</label></div>
+    <div class="muted" style="margin-top:8px">One pump at a time; the board restarts to switch. Switching between DASH and Omnipod 5 forgets the pod. Changing only the YpsoPump's firmware keeps the same pump (key, serial, history) unless "as a new YpsoPump" is ticked.</div>
+  </section>
+
+  <section class="card" aria-labelledby="h-ypso" id="ypsoCard" hidden>
+    <h2 id="h-ypso">YpsoPump</h2>
+    <div id="ypPassBox" hidden style="margin-bottom:12px;padding:12px;border-radius:10px;border:2px solid var(--accent, #2a6)">
+      <div class="muted">The phone is pairing: type this passkey on the phone</div>
+      <div style="font-size:40px;font-weight:700;letter-spacing:6px;font-variant-numeric:tabular-nums" id="ypPasskey">—</div>
+    </div>
+    <div class="big">
+      <span class="val" id="ypRes">—</span>
+      <span class="unit">U in reservoir</span>
+      <span class="chip" id="ypState">—</span>
+    </div>
+    <dl>
+      <dt>Pump</dt><dd id="ypName">—</dd>
+      <dt>Firmware</dt><dd id="ypFw">—</dd>
+      <dt>Phone</dt><dd id="ypLink">—</dd>
+      <dt>Basal now</dt><dd id="ypBasal">—</dd>
+      <dt>Temp basal</dt><dd id="ypTbr">—</dd>
+      <dt>Bolus</dt><dd id="ypBolus">—</dd>
+      <dt>Extended bolus</dt><dd id="ypExt">—</dd>
+      <dt>Counters</dt><dd id="ypCounters">—</dd>
+    </dl>
+    <div class="row">
+      <div><label for="ypResIn">Reservoir (U; blank: no cartridge)</label><input type="number" id="ypResIn" min="0" max="300" step="0.01"></div>
+      <div><label for="ypBatIn">Battery</label><select id="ypBatIn">
+        <option value="5">100 %</option><option value="4">80 %</option><option value="3">60 %</option><option value="2">40 %</option><option value="1">20 %</option><option value="0">0 % (empty)</option><option value="6">invalid</option></select></div>
+      <div style="flex:0"><button class="primary" id="ypSet">Set</button></div>
+    </div>
+    <div class="actions">
+      <button id="ypSuspend">Suspend</button>
+      <button id="ypReboot">Restart the pump (reboot counter +1)</button>
+      <button id="ypBonds">Forget Bluetooth bonds</button>
+    </div>
+    <label style="display:flex;gap:8px;align-items:flex-start;margin:12px 0 0;font-size:14px;color:var(--fg)"><input type="checkbox" id="ypOpen" style="margin-top:3px"> <span>Let any phone in without the pump's password, so an app with no key file for it works at once (a real pump never does this). Untick to need the password from the key export, like a real pump.</span></label>
+    <div class="actions">
+      <button class="primary" id="ypExport">Download the key export for rockit</button>
+      <span class="muted" id="ypPass"></span>
+    </div>
+    <div class="muted" style="margin-top:8px">The export carries this simulated pump's own session key and password (made at random, no real pump's), sealed under the passphrase shown. Import it with rockit's <code>pump-provision export</code> or the phone app. The pump pairs over Bluetooth by passkey the first time the phone connects: type the number shown at the top of this card. The key export is needed only when the box above is unticked, or for the encrypted firmware (V05, V35), whose messages need the session key.</div>
   </section>
 
   <section class="card" aria-labelledby="h-newpod">
@@ -137,7 +187,7 @@
     <h2 id="h-cgm">CGM</h2>
     <div class="big">
       <span class="val" id="cgmGlucose">—</span>
-      <span class="unit">mg/dL next reading</span>
+      <span class="unit">mg/dL last reading</span>
       <span class="chip" id="cgmState">—</span>
     </div>
     <dl>
@@ -149,11 +199,28 @@
     </dl>
     <p class="muted" style="color:var(--bad)">Made-up readings. Use only a test phone that controls no real pump or pod: an app reading this sensor would dose insulin from these numbers.</p>
     <div class="row">
+      <div><label for="cgmPatternIn">Glucose comes from</label>
+        <select id="cgmPatternIn"><option value="1">A virtual person (meals, insulin, exercise, drift)</option><option value="0">Manual: the value and trend below</option></select></div>
+      <div id="cgmSourceBox"><label for="cgmSourceIn">Their insulin</label>
+        <select id="cgmSourceIn"><option value="1">From the simulated pump (the AID's)</option><option value="0">Their own (basal and meal boluses)</option></select></div>
+    </div>
+    <div class="row" id="cgmPersonRow">
+      <div><label for="cgmIsfIn">ISF (mg/dL per U)</label><input type="number" id="cgmIsfIn" min="5" max="400" step="1"></div>
+      <div><label for="cgmIcrIn">Carb ratio (g per U)</label><input type="number" id="cgmIcrIn" min="1" max="100" step="1"></div>
+      <div><label for="cgmBasalIn">Basal need (U/h)</label><input type="number" id="cgmBasalIn" min="0.05" max="5" step="0.05"></div>
+      <div style="flex:0"><button class="primary" id="cgmPatternSet">Apply</button></div>
+    </div>
+    <div id="cgmPersonInfo" class="muted" style="margin-top:8px"></div>
+    <div class="actions" id="cgmPersonActions">
+      <button id="cgmSnack">Snack now (20 g)</button>
+      <button id="cgmExercise">Exercise now (45 min)</button>
+    </div>
+    <div class="row" id="cgmManualRow">
       <div><label for="cgmGlucoseIn">Glucose (40–400 mg/dL)</label><input type="number" id="cgmGlucoseIn" min="40" max="400" step="1"></div>
       <div><label for="cgmTrendIn">Trend (mg/dL per minute, −5 to 5)</label><input type="number" id="cgmTrendIn" min="-5" max="5" step="0.1"></div>
       <div style="flex:0"><button class="primary" id="cgmGlucoseSet">Set</button></div>
     </div>
-    <div class="muted" style="margin-top:8px">A reading every 5 minutes; the trend moves the value at each one.</div>
+    <div class="muted" style="margin-top:8px">A reading every 5 minutes. The virtual person eats on their own (breakfast, lunch, dinner, snacks, from a list of foods), treats their own lows, sometimes exercises; their glucose follows the insulin they get. "From the simulated pump" means only what the pod or YpsoPump delivers: the AID's decisions show in the glucose (the pod counts its boluses and its running basal; its temp basals are not modelled yet). A toy model for testing software, not a physiological simulator.</div>
     <div class="row" style="margin-top:6px">
       <div><label for="cgmStateIn">Sensor state</label>
         <select id="cgmStateIn">
@@ -364,9 +431,22 @@ $('faultClear').onclick = ()=>send({command:'setFault', value:0}, 'Fault cleared
 $('crashBefore').onclick = ()=>send({command:'crashNextCommand', beforeProcessing:true}, 'Armed');
 $('crashAfter').onclick = ()=>send({command:'crashNextCommand', beforeProcessing:false}, 'Armed');
 
-$('typeSet').onclick = ()=>{ const v=+$('typeIn').value, name=v ? 'Omnipod 5' : 'DASH';
+const FW_NAMES = ['V05.02.03','V35.01.00','V65.00.06','V03.00.00','V02.00.00'];
+let ypActive = false, ypLast = null;
+$('fwBox').hidden = true;
+$('typeIn').onchange = ()=>{ edited.type=true; $('fwBox').hidden = $('typeIn').value!=='2'; };
+$('fwIn').onchange = ()=>edited.type=true;
+async function pumpSelect(body, done){
+  try { const r = await fetch('/ypso',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const t = await r.text(); if(!r.ok) throw new Error(t.trim()); say(done); edited.type=false; } catch(e){ say('Failed — '+e.message); } }
+$('typeSet').onclick = ()=>{ const v=+$('typeIn').value;
+  if(v===2){ const fw=+$('fwIn').value, fresh=$('fwFresh').checked;
+    if(confirm('Become a '+(fresh?'new ':'')+'YpsoPump on firmware '+FW_NAMES[fw]+'? The board restarts.'))
+      pumpSelect({command:'pumpSelect', pump:1, fw:fw, fresh:fresh}, 'Restarting as a YpsoPump…');
+    return; }
+  const name = v ? 'Omnipod 5' : 'DASH';
+  if(ypActive){ if(confirm('Become an '+name+' pod? The board restarts.')) pumpSelect({command:'pumpSelect', pump:0, podType:v}, 'Restarting as an '+name+' pod…'); return; }
   if(confirm('Forget this pod and become a new '+name+' pod?')) { edited.type=false; send({command:'setPodType', value:v}, 'Now a new '+name+' pod'); } };
-$('typeIn').onchange = ()=>edited.type=true;
 $('newPod').onclick = ()=>{ if(confirm('Forget this pod? The phone will need to pair a new one.')) send({command:'resetPod'}, 'New pod ready'); };
 async function wifi(body, done){
   try { const r = await fetch('/wifi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -378,8 +458,9 @@ function chip(el, text, cls){ el.textContent=text; el.className='chip '+(cls||''
 
 function show(s){
   last = s;
+  if(ypActive) return; /* the YpsoPump card speaks for the pump */
   $('title').textContent = (s.podType || 'DASH') + ' pod';
-  if(!edited.type) $('typeIn').value = s.podType === 'Omnipod 5' ? '1' : '0';
+  if(!edited.type && !ypActive) $('typeIn').value = s.podType === 'Omnipod 5' ? '1' : '0';
   $('podid').textContent = s.id ? 'id '+s.id : (s.paired ? '' : 'not paired');
   chip($('link'), s.connected ? 'connected' : 'not connected', s.connected ? 'ok' : '');
   $('reservoir').textContent = Math.round(s.reservoir*100)/100;
@@ -406,6 +487,58 @@ function show(s){
 
 async function refresh(){ try { show(await (await fetch('/status')).json()); } catch(e){} }
 refresh(); setInterval(refresh, 1000);
+
+/* ---- YpsoPump ---- */
+async function ypSend(body, done){
+  try { const r = await fetch('/ypso',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const t = await r.text(); if(!r.ok) throw new Error(t.trim()); const j = JSON.parse(t); say(done); return j; }
+  catch(e){ say('Failed — '+e.message); return null; } }
+const u2 = h=>(h/100).toFixed(2);
+$('ypSet').onclick = async ()=>{ const r=$('ypResIn').value.trim();
+  await ypSend({command:'ypsoReservoir', hundredths: r==='' ? -1 : Math.round(+r*100)}, 'Reservoir set');
+  const j = await ypSend({command:'ypsoBattery', level:+$('ypBatIn').value}, 'Set'); if(j) showYpso(j); };
+$('ypSuspend').onclick = async ()=>{ const on = !(ypLast && ypLast.suspended);
+  const j = await ypSend({command:'ypsoSuspend', on:on}, on ? 'Suspended' : 'Resumed'); if(j) showYpso(j); };
+$('ypReboot').onclick = async ()=>{ if(confirm('Restart the pump? Its reboot counter goes up, and the phone must authorise again.')) { const j = await ypSend({command:'ypsoReboot'}, 'Pump restarted'); if(j) showYpso(j); } };
+$('ypOpen').onchange = async ()=>{ const on = $('ypOpen').checked;
+  const j = await ypSend({command:'ypsoOpen', on:on}, on ? 'Any phone gets in' : 'Only the pump\'s password gets in'); if(j) showYpso(j); };
+$('ypBonds').onclick = ()=>{ if(confirm('Forget every Bluetooth bond? The phone must pair again (and may need to forget the pump too).')) ypSend({command:'ypsoForgetBonds'}, 'Bonds forgotten'); };
+$('ypExport').onclick = async ()=>{ say('Making the export (a few seconds)…');
+  const j = await ypSend({command:'ypsoExport'}, 'Export ready');
+  if(!j || !j.file) return;
+  const blob = new Blob([JSON.stringify(j.file, null, 2)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'ypso-session-'+j.file.pump_serial+'.json'; document.body.appendChild(a); a.click(); a.remove();
+  $('ypPass').textContent = 'Passphrase: '+j.passphrase; };
+function showYpso(y){
+  ypActive = !!y.active;
+  $('ypsoCard').hidden = !ypActive;
+  document.querySelectorAll('[aria-labelledby=h-status],[aria-labelledby=h-res],[aria-labelledby=h-age],[aria-labelledby=h-alerts],[aria-labelledby=h-fault],[aria-labelledby=h-crash],[aria-labelledby=h-newpod],[aria-labelledby=h-comms]')
+    .forEach(c=>c.hidden = ypActive);
+  if(!ypActive) return;
+  ypLast = y;
+  $('title').textContent = 'YpsoPump';
+  $('podid').textContent = y.name;
+  chip($('link'), y.connected ? 'connected' : 'not connected', y.connected ? 'ok' : '');
+  if(!edited.type){ $('typeIn').value='2'; $('fwIn').value=String(y.fw); $('fwBox').hidden=false; }
+  $('ypPassBox').hidden = !y.passkey; $('ypPasskey').textContent = y.passkey || '—';
+  if(document.activeElement!==$('ypOpen')) $('ypOpen').checked = !!y.open;
+  $('ypRes').textContent = y.reservoir < 0 ? 'no cartridge' : u2(y.reservoir);
+  chip($('ypState'), y.suspended ? 'suspended' : 'running', y.suspended ? 'warn' : 'ok');
+  $('ypName').textContent = y.name+' (serial '+String(y.serial).padStart(8,'0')+')';
+  $('ypFw').textContent = y.firmware;
+  $('ypLink').textContent = !y.connected ? 'not connected' : y.authorized ? 'connected, authorised' : y.open ? 'connected (let in without a password)' : 'connected, not authorised';
+  $('ypBasal').textContent = u2(y.basalNow)+' U/h';
+  $('ypTbr').textContent = y.tbrPercent===100 ? 'none' : y.tbrPercent+' %, '+y.tbrLeft+' min left';
+  $('ypBolus').textContent = y.bolusActive ? u2(y.bolusDelivered)+' of '+u2(y.bolusTotal)+' U' : 'none';
+  $('ypExt').textContent = y.extendedActive ? u2(y.extendedDelivered)+' of '+u2(y.extendedTotal)+' U' : 'none';
+  $('ypCounters').textContent = 'reboot '+y.reboot+', read '+y.readCounter+', write '+y.writeCounter+', '+y.events+' history entries';
+  $('ypSuspend').textContent = y.suspended ? 'Resume' : 'Suspend';
+  if(document.activeElement!==$('ypResIn')) $('ypResIn').value = y.reservoir < 0 ? '' : u2(y.reservoir);
+  if(document.activeElement!==$('ypBatIn')) $('ypBatIn').value = String(y.battery);
+}
+async function refreshYpso(){ try { showYpso(await (await fetch('/ypso')).json()); } catch(e){} }
+refreshYpso(); setInterval(refreshYpso, 1500);
 
 /* ---- CGM ---- */
 const CGM_STATES = {1:'Stopped',2:'Warm-up',6:'OK',16:'Session failed',18:'Temporary issue',24:'Expired',25:'Sensor failed',26:'Session ended'};
@@ -435,7 +568,7 @@ function showCgm(c){
   if(!cgmEdited.cgmKindIn) $('cgmKindIn').value = String(c.kind);
   if(!c.kind){ $('cgmGlucose').textContent='—'; chip($('cgmState'),'off');
     ['cgmDevice','cgmAge','cgmLast','cgmNext','cgmLink'].forEach(id=>$(id).textContent='—'); return; }
-  $('cgmGlucose').textContent = c.glucose;
+  $('cgmGlucose').textContent = c.last && c.last.glucose ? c.last.glucose : c.glucose;
   const st = CGM_STATES[c.state] || ('state '+c.state);
   chip($('cgmState'), st+(c.forcedState?' (set)':''), c.state===6 ? 'ok' : c.state===2 ? 'warn' : 'bad');
   $('cgmDevice').textContent = c.kind===6 ? 'Dexcom G6, transmitter '+c.id+' ('+c.name+')' : 'Dexcom G7, '+c.name;
@@ -448,6 +581,30 @@ function showCgm(c){
   if(!cgmEdited.cgmTrendIn && document.activeElement!==$('cgmTrendIn')) $('cgmTrendIn').value = c.trend/10;
   if(!cgmEdited.cgmStateIn) $('cgmStateIn').value = String(c.forcedState);
   $('cgmLoss').checked = c.signalLoss;
+  showPerson(c);
+}
+
+['cgmPatternIn','cgmSourceIn','cgmIsfIn','cgmIcrIn','cgmBasalIn'].forEach(id=>$(id).oninput=()=>cgmEdited[id]=true);
+$('cgmPatternSet').onclick = ()=>{ ['cgmPatternIn','cgmSourceIn','cgmIsfIn','cgmIcrIn','cgmBasalIn'].forEach(id=>cgmEdited[id]=false);
+  cgmSend({command:'cgmPattern', pattern:+$('cgmPatternIn').value, source:+$('cgmSourceIn').value,
+    isf:Math.round(+$('cgmIsfIn').value), icr:Math.round(+$('cgmIcrIn').value), basalNeed:Math.round(+$('cgmBasalIn').value*100)}, 'Applied'); };
+$('cgmPatternIn').onchange = ()=>{ cgmEdited.cgmPatternIn=true; cgmModeView(+$('cgmPatternIn').value); };
+$('cgmSnack').onclick = ()=>cgmSend({command:'cgmEat', grams:20}, 'The person has a snack');
+$('cgmExercise').onclick = ()=>cgmSend({command:'cgmExercise', minutes:45}, 'The person goes for a run');
+function cgmModeView(p){ $('cgmManualRow').hidden = p===1; ['cgmSourceBox','cgmPersonRow','cgmPersonInfo','cgmPersonActions'].forEach(id=>$(id).hidden = p!==1); }
+const hm = t=>new Date(t*1000).toLocaleTimeString([], {timeStyle:'short'});
+function showPerson(c){
+  if(!cgmEdited.cgmPatternIn) $('cgmPatternIn').value = String(c.pattern);
+  if(!cgmEdited.cgmSourceIn) $('cgmSourceIn').value = String(c.insulinSource);
+  if(!cgmEdited.cgmIsfIn && document.activeElement!==$('cgmIsfIn')) $('cgmIsfIn').value = c.isf;
+  if(!cgmEdited.cgmIcrIn && document.activeElement!==$('cgmIcrIn')) $('cgmIcrIn').value = c.icr;
+  if(!cgmEdited.cgmBasalIn && document.activeElement!==$('cgmBasalIn')) $('cgmBasalIn').value = (c.basalNeed/100).toFixed(2);
+  cgmModeView(cgmEdited.cgmPatternIn ? +$('cgmPatternIn').value : c.pattern);
+  if(c.pattern!==1){ $('cgmPersonInfo').textContent=''; return; }
+  const parts = ['True glucose '+c.trueGlucose+' mg/dL', 'insulin on board '+c.iob.toFixed(2)+' U'];
+  if(c.lastMeal) parts.push('last ate '+c.lastFood+' ('+c.lastMealGrams+' g) at '+hm(c.lastMeal));
+  if(c.nextMeal) parts.push('next: '+c.nextFood+' ('+c.nextMealGrams+' g) around '+hm(c.nextMeal));
+  $('cgmPersonInfo').textContent = parts.join(' · ');
 }
 async function refreshCgm(){ try { showCgm(await (await fetch('/cgm')).json()); } catch(e){} }
 refreshCgm(); setInterval(refreshCgm, 2000);

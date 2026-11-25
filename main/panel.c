@@ -10,6 +10,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "app.h"
@@ -168,7 +169,7 @@ static esp_err_t post_command(httpd_req_t *req)
 
 static esp_err_t send_cgm(httpd_req_t *req)
 {
-    char json[768];
+    char json[1400];
     size_t n = cgm_app_status_json(json, sizeof json);
     if (n == 0) {
         return httpd_resp_send_500(req);
@@ -191,6 +192,107 @@ static esp_err_t post_cgm(httpd_req_t *req)
         return ESP_OK;
     }
     return send_cgm(req);
+}
+
+/* ---- the YpsoPump: GET /ypso, POST /ypso {"command": ...} ----------------------- */
+
+static esp_err_t send_ypso(httpd_req_t *req)
+{
+    char json[900];
+    size_t n;
+    if (store_load_pump() == 1) {
+        n = ypso_app_status_json(json, sizeof json);
+        if (n == 0 || n + 20 > sizeof json) {
+            return httpd_resp_send_500(req);
+        }
+        n--;
+        n += (size_t)snprintf(json + n, sizeof json - n, ",\"active\":true}");
+    } else {
+        n = (size_t)snprintf(json, sizeof json, "{\"active\":false}");
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, json, (ssize_t)n);
+}
+
+static void restart(void *arg);
+static void restart_soon(void);
+
+static esp_err_t post_ypso(httpd_req_t *req)
+{
+    char body[256];
+    if (read_body(req, body, sizeof body) < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad request body");
+        return ESP_OK;
+    }
+    /* Switching the pump: {"command": "pumpSelect", "pump": 0 (pod) | 1 (YpsoPump),
+     * "podType": 0 | 1, "fw": 0-4, "fresh": true}. The board restarts. */
+    if (strstr(body, "\"pumpSelect\"")) {
+        long pump = -1, fw = -1, pod_type = -1, fresh = 0;
+        const char *p;
+        if ((p = strstr(body, "\"pump\""))) {
+            pump = strtol(strchr(p, ':') + 1, NULL, 10);
+        }
+        if ((p = strstr(body, "\"fw\""))) {
+            fw = strtol(strchr(p, ':') + 1, NULL, 10);
+        }
+        if ((p = strstr(body, "\"podType\""))) {
+            pod_type = strtol(strchr(p, ':') + 1, NULL, 10);
+        }
+        fresh = strstr(body, "\"fresh\":true") != NULL;
+        if (pump != 0 && pump != 1) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "pump is 0 (Omnipod pod) or 1 (YpsoPump)");
+            return ESP_OK;
+        }
+        if (pump == 1) {
+            if (fw < 0 || fw >= YPSO_FW_COUNT) {
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "fw is 0 to 4");
+                return ESP_OK;
+            }
+            ypso_state_t *st = malloc(sizeof *st);
+            if (!st) {
+                return httpd_resp_send_500(req);
+            }
+            /* The same pump on another firmware keeps its key and history;
+             * "fresh" (or none yet) makes a new one. */
+            if (fresh || !store_load_ypso(st)) {
+                ypso_state_fresh(st, (ypso_fw_t)fw);
+                ble_forget_bonds();
+            }
+            st->fw = (uint8_t)fw;
+            store_save_ypso(NULL, st);
+            free(st);
+        } else if (pod_type == 0 || pod_type == 1) {
+            char cmd[64];
+            snprintf(cmd, sizeof cmd, "{\"command\":\"setPodType\",\"value\":%ld}", pod_type);
+            if (store_load_pump() == 1 || pod_type != the_pod->st.pod_type) {
+                dash_pod_panel_command(the_pod, cmd, strlen(cmd));
+            }
+        }
+        store_save_pump((uint8_t)pump);
+        httpd_resp_sendstr(req, "{\"restarting\":true}");
+        restart_soon();
+        return ESP_OK;
+    }
+    char *reply = malloc(2400);
+    if (!reply) {
+        return httpd_resp_send_500(req);
+    }
+    const char *err = store_load_pump() == 1 ? ypso_app_command(body, reply, 2400) : "the board is not a YpsoPump";
+    esp_err_t r;
+    if (err) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err);
+        r = ESP_OK;
+    } else if (reply[0]) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        r = httpd_resp_sendstr(req, reply);
+    } else {
+        r = send_ypso(req);
+    }
+    memset(reply, 0, 2400);
+    free(reply);
+    return r;
 }
 
 /* Reads a JSON string value ("key": "value") with \" and \\ escapes. */
@@ -228,6 +330,16 @@ static void restart(void *arg)
     esp_restart();
 }
 
+static void restart_soon(void)
+{
+    static esp_timer_handle_t t;
+    const esp_timer_create_args_t args = {.callback = restart, .name = "restart"};
+    if (!t) {
+        esp_timer_create(&args, &t);
+    }
+    esp_timer_start_once(t, 1000 * 1000);
+}
+
 static esp_err_t post_wifi(httpd_req_t *req)
 {
     char body[256], ssid[33], pass[65];
@@ -242,12 +354,7 @@ static esp_err_t post_wifi(httpd_req_t *req)
     }
     store_save_wifi(ssid, pass);
     httpd_resp_sendstr(req, "saved; restarting\n");
-    static esp_timer_handle_t t;
-    const esp_timer_create_args_t args = {.callback = restart, .name = "restart"};
-    if (!t) {
-        esp_timer_create(&args, &t);
-    }
-    esp_timer_start_once(t, 1000 * 1000);
+    restart_soon();
     return ESP_OK;
 }
 
@@ -257,7 +364,8 @@ void panel_start(dash_pod_t *pod)
     wifi_start();
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.stack_size = 8192;
+    cfg.stack_size = 12288; /* the YpsoPump's key export: PBKDF2 and AES-GCM */
+    cfg.max_uri_handlers = 12;
     httpd_handle_t server = NULL;
     ESP_ERROR_CHECK(httpd_start(&server, &cfg));
     const httpd_uri_t routes[] = {
@@ -267,6 +375,8 @@ void panel_start(dash_pod_t *pod)
         {.uri = "/wifi", .method = HTTP_POST, .handler = post_wifi},
         {.uri = "/cgm", .method = HTTP_GET, .handler = send_cgm},
         {.uri = "/cgm", .method = HTTP_POST, .handler = post_cgm},
+        {.uri = "/ypso", .method = HTTP_GET, .handler = send_ypso},
+        {.uri = "/ypso", .method = HTTP_POST, .handler = post_ypso},
     };
     for (size_t i = 0; i < sizeof routes / sizeof routes[0]; i++) {
         httpd_register_uri_handler(server, &routes[i]);

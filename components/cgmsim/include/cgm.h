@@ -55,6 +55,49 @@ typedef struct {
     int8_t trend;    /* tenths of mg/dL per minute */
 } cgm_reading_t;
 
+typedef enum {
+    CGM_PATTERN_MANUAL = 0, /* the panel's glucose, moved by the panel's trend */
+    CGM_PATTERN_PERSON = 1, /* a virtual person: meals, insulin, dawn, exercise, drift, sensor noise */
+} cgm_pattern_t;
+
+typedef enum {
+    CGM_INSULIN_SELF = 0, /* the person doses themselves: basal, and (imperfect) meal boluses */
+    CGM_INSULIN_PUMP = 1, /* only what the simulated pump delivers: the AID's own insulin */
+} cgm_insulin_t;
+
+#define CGM_MEALS 8
+#define CGM_INSULIN_BUCKETS 84 /* 5-minute buckets: 7 hours of insulin */
+
+typedef struct {
+    int64_t t;          /* Unix seconds: eaten (or to be) */
+    uint16_t grams;
+    uint16_t absorb;    /* minutes */
+    int64_t bolus_t;    /* CGM_INSULIN_SELF: when the person boluses for it, 0 once given */
+    uint16_t bolus;     /* hundredths of a unit */
+    uint8_t food;       /* index into the food list (cgm_food_name) */
+    uint8_t delay;      /* minutes before it starts to absorb (fat and protein) */
+} cgm_meal_t;
+
+/* The virtual person's state, saved with the sensor. */
+typedef struct {
+    int64_t g_milli;        /* true glucose, thousandths of mg/dL */
+    int64_t minute;         /* the last simulated minute (Unix seconds / 60) */
+    uint32_t rng;
+    int32_t drift;          /* thousandths of mg/dL a minute: hormones, stress, the unexplained */
+    int32_t noise;          /* the sensor's error, thousandths of mg/dL */
+    uint32_t pump_last;     /* the pump's cumulative delivery when last seen, hundredths */
+    bool pump_seen;
+    int32_t basal_milli;    /* self-dosed basal not yet counted, thousandths of a hundredth */
+    uint16_t ins[CGM_INSULIN_BUCKETS]; /* insulin per 5 minutes, hundredths; [0] the current */
+    int64_t ins_bucket;     /* the current bucket's minute / 5 */
+    cgm_meal_t meals[CGM_MEALS];
+    int64_t planned_day;    /* local day number the meals were planned for */
+    int64_t exercise_t;     /* Unix seconds, 0 none */
+    uint16_t exercise_min;
+    int64_t correction_t;   /* the person's last correction bolus */
+    int64_t treated_t;      /* the person's last low treatment */
+} cgm_person_t;
+
 typedef struct {
     uint8_t version;
     uint8_t kind;          /* cgm_kind_t */
@@ -75,6 +118,14 @@ typedef struct {
     uint32_t calibration_t;
     uint8_t n_hist;
     cgm_reading_t hist[CGM_HISTORY]; /* oldest first */
+    /* Added later, at the end: an older save loads with these zero, which is
+     * the manual pattern (see store_load_cgm). */
+    uint8_t pattern;        /* cgm_pattern_t */
+    uint8_t insulin_source; /* cgm_insulin_t */
+    uint16_t isf;           /* the person: mg/dL one unit lowers */
+    uint16_t icr;           /* grams of carbohydrate one unit covers */
+    uint16_t basal_need;    /* hundredths of a unit an hour that hold glucose level */
+    cgm_person_t person;
 } cgm_state_t;
 
 typedef struct {
@@ -87,6 +138,11 @@ typedef struct {
     int64_t (*now)(void *ctx); /* Unix seconds */
     void (*save)(void *ctx, const cgm_state_t *st);
     void (*log)(void *ctx, const char *msg);
+    /* The local zone, seconds east of UTC (meal times). NULL: UTC. */
+    int32_t (*utc_offset)(void *ctx);
+    /* The simulated pump's cumulative delivery, hundredths of a unit, or -1
+     * when there is no pump to read. NULL: none. */
+    int64_t (*pump_insulin)(void *ctx);
 } cgm_io_t;
 
 typedef struct {
@@ -129,6 +185,14 @@ void cgm_set_glucose(cgm_t *c, uint16_t glucose, int8_t trend);
 void cgm_set_state(cgm_t *c, uint8_t forced_state);
 void cgm_set_signal_loss(cgm_t *c, bool on);
 void cgm_skip_warmup(cgm_t *c);
+/* The virtual person (CGM_PATTERN_PERSON). 0 keeps a value as it is. */
+void cgm_set_pattern(cgm_t *c, cgm_pattern_t pattern, cgm_insulin_t source, uint16_t isf, uint16_t icr,
+                     uint16_t basal_need);
+void cgm_eat(cgm_t *c, uint16_t grams);        /* a snack now, on top of the person's own meals */
+const char *cgm_food_name(uint8_t food);
+void cgm_exercise(cgm_t *c, uint16_t minutes); /* exercise starting now */
+/* The person's true glucose, mg/dL (tests). */
+int cgm_person_glucose(const cgm_t *c);
 void cgm_new_sensor(cgm_t *c, cgm_kind_t kind, const char *id);
 /* A JSON object describing the CGM, for the panel. */
 size_t cgm_status_json(cgm_t *c, char *out, size_t cap);

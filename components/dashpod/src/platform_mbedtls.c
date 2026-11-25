@@ -1,5 +1,6 @@
 /*
- * The platform crypto on mbedTLS: AES, SHA-256 and P-256. The same file runs
+ * The platform crypto on mbedTLS: AES (block and GCM), SHA-256, P-256,
+ * ChaCha20-Poly1305, PBKDF2 and base64. The same file runs
  * on the ESP32 (ESP-IDF's mbedTLS, with its AES and SHA accelerators) and in
  * the host tests (built from ESP-IDF's copy of mbedTLS).
  *
@@ -8,6 +9,11 @@
 #include <string.h>
 
 #include "mbedtls/aes.h"
+#include "mbedtls/base64.h"
+#include "mbedtls/chachapoly.h"
+#include "mbedtls/gcm.h"
+#include "mbedtls/md.h"
+#include "mbedtls/pkcs5.h"
 #include "mbedtls/ecdh.h"
 #include "mbedtls/ecdsa.h"
 #include "mbedtls/ecp.h"
@@ -170,4 +176,83 @@ int dash_p256_verify(const uint8_t pub[64], const uint8_t *msg, size_t n, const 
     if (rc == 0) rc = mbedtls_ecdsa_verify(&k.grp, hash, sizeof hash, &k.q, &k.r, &k.s);
     p256_close(&k);
     return rc == 0 ? 0 : -1;
+}
+
+/* ---- ChaCha20-Poly1305, PBKDF2, AES-GCM, base64 (the YpsoPump) ------------- */
+
+int dash_chachapoly_seal(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *p, size_t n,
+                         uint8_t *out)
+{
+    mbedtls_chachapoly_context c;
+    mbedtls_chachapoly_init(&c);
+    int rc = mbedtls_chachapoly_setkey(&c, key);
+    if (rc == 0) {
+        rc = mbedtls_chachapoly_encrypt_and_tag(&c, n, nonce, NULL, 0, p, out, out + n);
+    }
+    mbedtls_chachapoly_free(&c);
+    return rc == 0 ? 0 : -1;
+}
+
+int dash_chachapoly_open(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *in, size_t n,
+                         uint8_t *out)
+{
+    mbedtls_chachapoly_context c;
+    mbedtls_chachapoly_init(&c);
+    int rc = mbedtls_chachapoly_setkey(&c, key);
+    if (rc == 0) {
+        rc = mbedtls_chachapoly_auth_decrypt(&c, n, nonce, NULL, 0, in + n, in, out);
+    }
+    mbedtls_chachapoly_free(&c);
+    return rc == 0 ? 0 : -1;
+}
+
+#define ROTL(v, c) (((v) << (c)) | ((v) >> (32 - (c))))
+#define QR(a, b, c, d)                                   \
+    do {                                                 \
+        a += b; d ^= a; d = ROTL(d, 16);                 \
+        c += d; b ^= c; b = ROTL(b, 12);                 \
+        a += b; d ^= a; d = ROTL(d, 8);                  \
+        c += d; b ^= c; b = ROTL(b, 7);                  \
+    } while (0)
+
+void dash_chacha20_rounds(uint32_t x[16])
+{
+    for (int i = 0; i < 10; i++) {
+        QR(x[0], x[4], x[8], x[12]);
+        QR(x[1], x[5], x[9], x[13]);
+        QR(x[2], x[6], x[10], x[14]);
+        QR(x[3], x[7], x[11], x[15]);
+        QR(x[0], x[5], x[10], x[15]);
+        QR(x[1], x[6], x[11], x[12]);
+        QR(x[2], x[7], x[8], x[13]);
+        QR(x[3], x[4], x[9], x[14]);
+    }
+}
+
+int dash_pbkdf2_sha256(const uint8_t *pass, size_t plen, const uint8_t *salt, size_t slen, uint32_t iterations,
+                       uint8_t out[32])
+{
+    return mbedtls_pkcs5_pbkdf2_hmac_ext(MBEDTLS_MD_SHA256, pass, plen, salt, slen, iterations, 32, out) == 0 ? 0
+                                                                                                          : -1;
+}
+
+int dash_aes256_gcm_seal(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *p, size_t n, uint8_t *out)
+{
+    mbedtls_gcm_context g;
+    mbedtls_gcm_init(&g);
+    int rc = mbedtls_gcm_setkey(&g, MBEDTLS_CIPHER_ID_AES, key, 256);
+    if (rc == 0) {
+        rc = mbedtls_gcm_crypt_and_tag(&g, MBEDTLS_GCM_ENCRYPT, n, nonce, 12, NULL, 0, p, out, 16, out + n);
+    }
+    mbedtls_gcm_free(&g);
+    return rc == 0 ? 0 : -1;
+}
+
+int dash_base64(const uint8_t *p, size_t n, char *out, size_t cap)
+{
+    size_t olen = 0;
+    if (mbedtls_base64_encode((unsigned char *)out, cap, &olen, p, n) != 0) {
+        return -1;
+    }
+    return (int)olen;
 }

@@ -1,7 +1,7 @@
 /*
- * Bluetooth on NimBLE. One board, two devices: the pod, from the chip's
- * public address, and (when one is switched on) a Dexcom CGM, from a random
- * static address of its own. Each is a separate advertising set, so the phone
+ * Bluetooth on NimBLE. One board, two devices: the pump (an Omnipod pod, or
+ * a YpsoPump), from the chip's public address, and (when one is switched on)
+ * a Dexcom CGM, from a random static address of its own. Each is a separate advertising set, so the phone
  * sees two peripherals and can be connected to both at once.
  *
  * They share one GATT database (NimBLE has one per host), so each device's
@@ -27,6 +27,9 @@
 #include "services/gatt/ble_svc_gatt.h"
 
 #include "dash_internal.h"
+#include "ypso.h"
+
+void ble_store_config_init(void);
 
 static const char *TAG = "ble";
 
@@ -61,6 +64,10 @@ static const ble_uuid16_t gap_name_uuid = BLE_UUID16_INIT(0x2a00);
 static const ble_uuid16_t gap_appearance_uuid = BLE_UUID16_INIT(0x2a01);
 
 static QueueHandle_t events;
+static bool ypso_mode;
+static uint8_t ypso_fw_id;
+static char ypso_adv_name[24];
+static int32_t passkey_shown = -1; /* -1: none waiting */
 static uint16_t cmd_handle, data_handle, o5_data_handle;
 static uint16_t dex_handle[CGM_CHR_COUNT];
 static volatile uint16_t pod_conn = BLE_HS_CONN_HANDLE_NONE;
@@ -148,16 +155,100 @@ static int gap_access(uint16_t conn_handle, uint16_t attr_handle, struct ble_gat
     }
     char name[16];
     xSemaphoreTake(adv_mu, portMAX_DELAY);
-    strcpy(name, conn_handle == cgm_conn ? cgm_adv_name : DASH_ADVERTISED_NAME);
+    strcpy(name, conn_handle == cgm_conn ? cgm_adv_name : ypso_mode ? ypso_adv_name : DASH_ADVERTISED_NAME);
     xSemaphoreGive(adv_mu);
     return os_mbuf_append(ctxt->om, name, strlen(name)) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+
+/* ---- the YpsoPump's services, built at boot for the chosen firmware ---------- */
+
+static ble_uuid128_t y_svc_uuid[YS_COUNT], y_chr_uuid[YC_COUNT];
+static uint16_t ypso_handle[YC_COUNT];
+static struct ble_gatt_chr_def ypso_chrs[YS_COUNT][24];
+static struct ble_gatt_svc_def ypso_svcs[YS_COUNT + 1];
+
+static int ypso_access(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    ypso_chr_t c = (ypso_chr_t)(intptr_t)arg;
+    if (conn_handle != pod_conn) {
+        return BLE_ATT_ERR_UNLIKELY; /* the CGM's connection */
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        uint8_t buf[64];
+        size_t n = 0;
+        int rc = ypso_app_on_read(c, buf, sizeof buf, &n);
+        ESP_LOGI(TAG, "ypso read  chr %d (%s): %s %u bytes", (int)c, ypso_chr(c)->uuid + 24, rc ? "refused" : "ok",
+                 rc ? (unsigned)rc : (unsigned)n);
+        if (rc != 0) {
+            return rc;
+        }
+        return os_mbuf_append(ctxt->om, buf, n) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    }
+    uint8_t buf[YPSO_PKT + 8];
+    uint16_t len = 0;
+    int rc = flat(ctxt->om, buf, sizeof buf, &len);
+    if (rc == 0) {
+        rc = ypso_app_on_write(c, buf, len);
+    }
+    ESP_LOGI(TAG, "ypso write chr %d (%s): %u bytes, %s 0x%02x", (int)c, ypso_chr(c)->uuid + 24, (unsigned)len,
+             rc ? "refused" : "ok", (unsigned)rc);
+    return rc;
+}
+
+static void ypso_build(void)
+{
+    int k = 0;
+    for (int s = 0; s < YS_COUNT; s++) {
+        if (!ypso_has_svc((ypso_fw_t)ypso_fw_id, (ypso_svc_t)s)) {
+            continue;
+        }
+        y_svc_uuid[s].u.type = BLE_UUID_TYPE_128;
+        ypso_uuid_le(ypso_svc_uuid((ypso_svc_t)s), y_svc_uuid[s].value);
+        int j = 0;
+        for (int c = 0; c < YC_COUNT; c++) {
+            const ypso_chr_info_t *ci = ypso_chr((ypso_chr_t)c);
+            if (ci->svc != s || !ypso_has_chr((ypso_fw_t)ypso_fw_id, (ypso_chr_t)c)) {
+                continue;
+            }
+            y_chr_uuid[c].u.type = BLE_UUID_TYPE_128;
+            ypso_uuid_le(ci->uuid, y_chr_uuid[c].value);
+            /* Like the pump: nothing but its version strings until the phone has
+             * bonded (an unencrypted link gets ATT 0x05 and pairs). */
+            bool open = ci->clear && c != YC_AUTH_PASSWORD && c != YC_EXTENDED_READ && c != YC_WRITE_CHALLENGE;
+            ble_gatt_chr_flags fl = 0;
+            if (ci->read) {
+                fl |= BLE_GATT_CHR_F_READ | (open ? 0 : BLE_GATT_CHR_F_READ_ENC);
+            }
+            if (ci->write) {
+                fl |= BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC;
+            }
+            ypso_chrs[s][j++] = (struct ble_gatt_chr_def){
+                .uuid = &y_chr_uuid[c].u,
+                .access_cb = ypso_access,
+                .arg = (void *)(intptr_t)c,
+                .flags = fl,
+                .val_handle = &ypso_handle[c],
+            };
+        }
+        ypso_chrs[s][j] = (struct ble_gatt_chr_def){0};
+        ypso_svcs[k++] = (struct ble_gatt_svc_def){
+            .type = BLE_GATT_SVC_TYPE_PRIMARY,
+            .uuid = &y_svc_uuid[s].u,
+            .characteristics = ypso_chrs[s],
+        };
+    }
+    ypso_svcs[k] = (struct ble_gatt_svc_def){0};
 }
 
 #define DEX_CHR(c, fl) \
     {.uuid = &dex_chr_uuid[c].u, .access_cb = dex_access, .arg = (void *)(intptr_t)(c), .flags = (fl), \
      .val_handle = &dex_handle[c]}
 
-static const struct ble_gatt_svc_def services[] = {
+static const struct ble_gatt_svc_def gap_services[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
         .uuid = &gap_svc_uuid.u,
@@ -168,6 +259,10 @@ static const struct ble_gatt_svc_def services[] = {
                 {0},
             },
     },
+    {0},
+};
+
+static const struct ble_gatt_svc_def pod_services[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
         .uuid = &svc_uuid.u,
@@ -194,6 +289,10 @@ static const struct ble_gatt_svc_def services[] = {
                 {0},
             },
     },
+    {0},
+};
+
+static const struct ble_gatt_svc_def cgm_services[] = {
     {
         /* The apps subscribe with setNotifyValue: they take notifications
          * or indications alike, and notifications need no queueing here. */
@@ -271,6 +370,18 @@ static void pod_advertise_now(void)
     static ble_uuid128_t o5_uuid;
     struct ble_hs_adv_fields fields = {0};
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    if (ypso_mode) {
+        /* "YpsoPump_<serial>", as the pump. */
+        fields.name = (const uint8_t *)ypso_adv_name;
+        fields.name_len = strlen(ypso_adv_name);
+        fields.name_is_complete = 1;
+        struct ble_hs_adv_fields rsp = {0};
+        rsp.name = fields.name;
+        rsp.name_len = fields.name_len;
+        rsp.name_is_complete = 1;
+        adv_start(POD_INSTANCE, &fields, &rsp, NULL, pod_gap_event);
+        return;
+    }
 
     xSemaphoreTake(adv_mu, portMAX_DELAY);
     if (adv_type == DASH_POD_O5) {
@@ -336,22 +447,44 @@ static void cgm_advertise_now(void)
 
 /* ---- connections -------------------------------------------------------------- */
 
+/* Pairing differs per link, and NimBLE reads it from ble_hs_cfg when the
+ * phone asks to pair (just after connecting). A YpsoPump shows a 6-digit
+ * passkey that the person types on the phone (passkey entry, MITM); a
+ * Dexcom has no screen and bonds Just Works. */
+static void security_for(bool pump_link)
+{
+    bool display = pump_link && ypso_mode;
+    ble_hs_cfg.sm_io_cap = display ? BLE_HS_IO_DISPLAY_ONLY : BLE_HS_IO_NO_INPUT_OUTPUT;
+    ble_hs_cfg.sm_mitm = display;
+}
+
 static int pod_gap_event(struct ble_gap_event *event, void *arg)
 {
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status == 0) {
             pod_conn = event->connect.conn_handle;
-            ESP_LOGI(TAG, "phone connected to the pod");
-            push(DASH_EV_CONNECTED, NULL, 0);
+            security_for(true);
+            ESP_LOGI(TAG, "phone connected to the %s", ypso_mode ? "YpsoPump" : "pod");
+            if (ypso_mode) {
+                ypso_app_on_connect();
+            } else {
+                push(DASH_EV_CONNECTED, NULL, 0);
+            }
         } else {
             pod_advertise_now();
         }
         break;
     case BLE_GAP_EVENT_DISCONNECT:
-        ESP_LOGI(TAG, "phone disconnected from the pod (reason 0x%x)", event->disconnect.reason);
+        ESP_LOGI(TAG, "phone disconnected from the %s (reason 0x%x)", ypso_mode ? "YpsoPump" : "pod",
+                 event->disconnect.reason);
         pod_conn = BLE_HS_CONN_HANDLE_NONE;
-        push(DASH_EV_DISCONNECTED, NULL, 0);
+        passkey_shown = -1;
+        if (ypso_mode) {
+            ypso_app_on_disconnect();
+        } else {
+            push(DASH_EV_DISCONNECTED, NULL, 0);
+        }
         pod_advertise_now();
         break;
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -360,8 +493,34 @@ static int pod_gap_event(struct ble_gap_event *event, void *arg)
         }
         break;
     case BLE_GAP_EVENT_MTU:
-        ESP_LOGI(TAG, "pod MTU %u", event->mtu.value);
+        ESP_LOGI(TAG, "pump link MTU %u", event->mtu.value);
         break;
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        ESP_LOGI(TAG, "pump link encryption %s (status %d)", event->enc_change.status == 0 ? "on" : "failed",
+                 event->enc_change.status);
+        passkey_shown = -1;
+        break;
+    case BLE_GAP_EVENT_PASSKEY_ACTION:
+        if (event->passkey.params.action == BLE_SM_IOACT_DISP) {
+            struct ble_sm_io io = {.action = BLE_SM_IOACT_DISP};
+            uint32_t r;
+            dash_random((uint8_t *)&r, sizeof r);
+            io.passkey = r % 1000000;
+            passkey_shown = (int32_t)io.passkey;
+            ESP_LOGW(TAG, "pairing passkey %06u: type it on the phone (also on the panel)", (unsigned)io.passkey);
+            ble_sm_inject_io(event->passkey.conn_handle, &io);
+        } else {
+            ESP_LOGW(TAG, "pairing asked for action %d, which a YpsoPump does not do", event->passkey.params.action);
+        }
+        break;
+    case BLE_GAP_EVENT_REPEAT_PAIRING: {
+        /* The phone lost its bond and pairs again: forget the old one. */
+        struct ble_gap_conn_desc desc;
+        if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) == 0) {
+            ble_store_util_delete_peer(&desc.peer_id_addr);
+        }
+        return BLE_GAP_REPEAT_PAIRING_RETRY;
+    }
     case BLE_GAP_EVENT_SUBSCRIBE:
         if (event->subscribe.attr_handle == cmd_handle || event->subscribe.attr_handle == data_handle ||
             event->subscribe.attr_handle == o5_data_handle) {
@@ -381,6 +540,7 @@ static int cgm_gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status == 0) {
             cgm_conn = event->connect.conn_handle;
+            security_for(false);
             cgm_app_on_connect();
         } else {
             cgm_advertise_now();
@@ -429,18 +589,52 @@ static void host_task(void *arg)
     nimble_port_freertos_deinit();
 }
 
-void ble_start(void)
+void ble_start(bool ypso, uint8_t fw, const char *ypso_name)
 {
     events = xQueueCreate(64, sizeof(dash_ev_t));
     adv_mu = xSemaphoreCreateMutex();
+    ypso_mode = ypso;
+    ypso_fw_id = fw;
+    if (ypso_name) {
+        strncpy(ypso_adv_name, ypso_name, sizeof ypso_adv_name - 1);
+    }
     ESP_ERROR_CHECK(nimble_port_init());
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.reset_cb = on_reset;
-    /* Not NimBLE's GAP service: ours answers the name per connection. */
+    /* Bonding, keys kept in flash: LE legacy pairing. The YpsoPump's link
+     * pairs by passkey, the CGM's Just Works (security_for); the pod never
+     * asks to pair. */
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+    ble_hs_cfg.sm_bonding = 1;
+    security_for(true);
+    ble_hs_cfg.sm_sc = 0;
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    /* Not NimBLE's GAP service: ours answers the name per connection. Only
+     * the chosen pump's services: the pod's, or the YpsoPump's. */
     ble_svc_gatt_init();
-    ESP_ERROR_CHECK(ble_gatts_count_cfg(services));
-    ESP_ERROR_CHECK(ble_gatts_add_svcs(services));
+    const struct ble_gatt_svc_def *pump = pod_services;
+    if (ypso) {
+        ypso_build();
+        pump = ypso_svcs;
+    }
+    const struct ble_gatt_svc_def *all[] = {gap_services, pump, cgm_services};
+    for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) {
+        ESP_ERROR_CHECK(ble_gatts_count_cfg(all[i]));
+        ESP_ERROR_CHECK(ble_gatts_add_svcs(all[i]));
+    }
+    ble_store_config_init();
     nimble_port_freertos_init(host_task);
+}
+
+int32_t ble_passkey(void)
+{
+    return passkey_shown;
+}
+
+void ble_forget_bonds(void)
+{
+    ble_store_clear();
 }
 
 bool ble_connected(void)

@@ -1,6 +1,7 @@
 /* Host tests for the simulated G6 transmitter and G7 sensor. Byte vectors
  * marked "upstream" are from CGMBLEKit's and G7SensorKit's own tests. */
 #include <stdbool.h>
+#include <math.h>
 #include <stdlib.h>
 
 #include "cgm.h"
@@ -465,6 +466,8 @@ static void test_status(void)
     CHECK(!fk.advertising);
 }
 
+static void test_person(void);
+
 void test_cgm_all(void)
 {
     test_formats();
@@ -472,4 +475,91 @@ void test_cgm_all(void)
     test_g6_passive();
     test_g6_active();
     test_status();
+    test_person();
+}
+
+/* ---- the virtual person ------------------------------------------------------------------ */
+
+static int64_t pump_total = -1;
+static int64_t f_pump(void *ctx) { return pump_total; }
+static int32_t f_utc(void *ctx) { return 0; }
+
+static void person_days(cgm_insulin_t source, int days, int *lo, int *hi, double *mean, double *sd, int *tir,
+                        int *below, int *changes, bool feed_basal)
+{
+    static cgm_t c;
+    static cgm_io_t io;
+    io = fio;
+    io.utc_offset = f_utc;
+    io.pump_insulin = f_pump;
+    memset(&fk, 0, sizeof fk);
+    fk.now = 1800000000 - 1800000000 % 86400; /* a midnight */
+    pump_total = source == CGM_INSULIN_PUMP ? 0 : -1;
+    cgm_state_t st;
+    cgm_state_fresh(&st, CGM_G7, NULL, fk.now);
+    cgm_init(&c, &st, &io);
+    cgm_skip_warmup(&c);
+    cgm_set_pattern(&c, CGM_PATTERN_PERSON, source, 45, 10, 80);
+    double sum = 0, sq = 0;
+    int n = 0, in = 0, low = 0, prev = -1;
+    *lo = 1000;
+    *hi = 0;
+    *changes = 0;
+    for (int s = 0; s < days * 86400; s++) {
+        fk.now++;
+        if (feed_basal && s % 45 == 0) {
+            pump_total += 1; /* 0.80 U/h: one hundredth every 45 s */
+        }
+        cgm_tick(&c);
+        if (c.st.n_hist && c.st.hist[c.st.n_hist - 1].seq != (uint32_t)prev) {
+            const cgm_reading_t *r = &c.st.hist[c.st.n_hist - 1];
+            prev = (int)r->seq;
+            if (!r->glucose) {
+                continue;
+            }
+            int g = r->glucose;
+            *lo = g < *lo ? g : *lo;
+            *hi = g > *hi ? g : *hi;
+            sum += g;
+            sq += (double)g * g;
+            n++;
+            in += g >= 70 && g <= 180;
+            low += g < 70;
+            *changes += r->trend != 0;
+        }
+    }
+    *mean = sum / n;
+    *sd = sqrt(sq / n - *mean * *mean);
+    *tir = 100 * in / n;
+    *below = 100 * low / n;
+}
+
+static void test_person(void)
+{
+    int lo, hi, tir, below, changes;
+    double mean, sd;
+    /* The person doses themselves: three days. */
+    person_days(CGM_INSULIN_SELF, 3, &lo, &hi, &mean, &sd, &tir, &below, &changes, false);
+    printf("  person, self-dosing, 3 days: %d-%d mg/dL, mean %.0f, SD %.0f, %d%% in 70-180, %d%% below 70\n", lo, hi,
+           mean, sd, tir, below);
+    CHECK(lo >= 40 && hi <= 400);
+    CHECK(sd > 15);              /* it moves */
+    CHECK(mean > 90 && mean < 220);
+    CHECK(tir > 40);             /* a person, not a flat line, and not a disaster */
+    CHECK(hi - lo > 80);
+    CHECK(changes > 100);        /* the trend arrow moves */
+
+    /* The pump delivers the basal need and nothing else: meals push it up,
+     * nothing brings it down but the basal. */
+    person_days(CGM_INSULIN_PUMP, 2, &lo, &hi, &mean, &sd, &tir, &below, &changes, true);
+    printf("  person, pump basal only, 2 days: %d-%d mg/dL, mean %.0f, SD %.0f\n", lo, hi, mean, sd);
+    CHECK(mean > 150); /* no meal insulin: high */
+
+    /* No insulin at all: glucose climbs and stays high, as it would. */
+    person_days(CGM_INSULIN_PUMP, 1, &lo, &hi, &mean, &sd, &tir, &below, &changes, false);
+    printf("  person, no insulin, 1 day: %d-%d mg/dL, mean %.0f\n", lo, hi, mean);
+    CHECK(hi >= 390);
+
+    /* The food names. */
+    CHECK(strcmp(cgm_food_name(0), "porridge with banana") == 0);
 }

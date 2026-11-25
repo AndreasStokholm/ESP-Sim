@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "dash.h" /* dash_aes128_encrypt_block, dash_random */
+#include "person.h"
 
 #define G6_WARMUP (2 * 3600)
 #define G6_SESSION (10 * 86400)
@@ -151,6 +152,9 @@ void cgm_state_fresh(cgm_state_t *st, cgm_kind_t kind, const char *id, int64_t n
     st->session_start = now;
     st->warmup_done = now + (kind == CGM_G6 ? G6_WARMUP : G7_WARMUP);
     st->glucose = 120;
+    st->isf = 45;
+    st->icr = 10;
+    st->basal_need = 80;
 }
 
 uint8_t cgm_current_state(const cgm_state_t *st, int64_t now)
@@ -279,10 +283,26 @@ static void make_reading(cgm_t *c, uint32_t n, int64_t now)
         .state = cgm_current_state(st, now),
         .trend = st->trend,
     };
+    if (st->pattern == CGM_PATTERN_PERSON) {
+        /* The virtual person: the sensor's value now; the trend over the last
+         * 15 minutes, as a Dexcom reports it. */
+        person_advance(c, now);
+        st->glucose = person_reading(c);
+        int trend = 0;
+        for (int i = st->n_hist - 1; i >= 0; i--) {
+            if (st->hist[i].glucose && r.seq - st->hist[i].seq == 3) {
+                trend = (st->glucose - st->hist[i].glucose) * 10 / 15;
+                break;
+            }
+        }
+        r.trend = (int8_t)(trend > 80 ? 80 : trend < -80 ? -80 : trend);
+    }
     if (r.state == CGM_STATE_OK) {
         r.glucose = st->glucose;
-        int g = st->glucose + (st->trend * 5 + (st->trend >= 0 ? 5 : -5)) / 10;
-        st->glucose = (uint16_t)(g < 40 ? 40 : g > 400 ? 400 : g);
+        if (st->pattern == CGM_PATTERN_MANUAL) {
+            int g = st->glucose + (st->trend * 5 + (st->trend >= 0 ? 5 : -5)) / 10;
+            st->glucose = (uint16_t)(g < 40 ? 40 : g > 400 ? 400 : g);
+        }
     } else {
         r.trend = NO_TREND;
     }
@@ -311,6 +331,9 @@ void cgm_tick(cgm_t *c)
     if (st->kind == CGM_OFF) {
         advertise(c, false);
         return;
+    }
+    if (st->pattern == CGM_PATTERN_PERSON) {
+        person_advance(c, now); /* a step a minute, between readings too */
     }
     uint32_t n = now > st->activated ? (uint32_t)((now - st->activated) / CGM_READING_INTERVAL) : 0;
     if (st->n_hist == 0 || n >= st->next_n) {
@@ -669,11 +692,61 @@ void cgm_new_sensor(cgm_t *c, cgm_kind_t kind, const char *id)
     cgm_state_fresh(&fresh, kind, id, c->io->now(c->io->ctx));
     fresh.glucose = c->st.glucose ? c->st.glucose : 120;
     fresh.trend = c->st.trend;
+    /* The person wearing it carries on: same pattern, same body. */
+    fresh.pattern = c->st.pattern;
+    fresh.insulin_source = c->st.insulin_source;
+    fresh.isf = c->st.isf;
+    fresh.icr = c->st.icr;
+    fresh.basal_need = c->st.basal_need;
+    fresh.person = c->st.person;
     c->st = fresh;
     save(c);
     char name[16];
     cgm_name(&c->st, name);
     logf_(c, "new %s: %s", kind == CGM_G6 ? "G6 transmitter" : kind == CGM_G7 ? "G7 sensor" : "(off)", name);
+}
+
+void cgm_set_pattern(cgm_t *c, cgm_pattern_t pattern, cgm_insulin_t source, uint16_t isf, uint16_t icr,
+                     uint16_t basal_need)
+{
+    cgm_state_t *st = &c->st;
+    bool start = pattern == CGM_PATTERN_PERSON &&
+                 (st->pattern != CGM_PATTERN_PERSON || st->person.minute == 0 || st->insulin_source != source);
+    st->insulin_source = (uint8_t)source;
+    st->isf = isf ? isf : st->isf ? st->isf : 45;
+    st->icr = icr ? icr : st->icr ? st->icr : 10;
+    st->basal_need = basal_need ? basal_need : st->basal_need ? st->basal_need : 80;
+    st->pattern = (uint8_t)pattern;
+    if (start) {
+        person_reset(c, c->io->now(c->io->ctx));
+        logf_(c, "virtual person: %s insulin, ISF %u, ICR %u, basal %u.%02u U/h",
+              source == CGM_INSULIN_PUMP ? "the pump's" : "their own", st->isf, st->icr, st->basal_need / 100,
+              st->basal_need % 100);
+    }
+    save(c);
+}
+
+void cgm_eat(cgm_t *c, uint16_t grams)
+{
+    if (c->st.pattern == CGM_PATTERN_PERSON) {
+        person_eat(c, c->io->now(c->io->ctx), grams);
+        logf_(c, "the person eats %u g", grams);
+        save(c);
+    }
+}
+
+void cgm_exercise(cgm_t *c, uint16_t minutes)
+{
+    if (c->st.pattern == CGM_PATTERN_PERSON) {
+        person_exercise(c, c->io->now(c->io->ctx), minutes);
+        logf_(c, "the person exercises for %u min", minutes);
+        save(c);
+    }
+}
+
+int cgm_person_glucose(const cgm_t *c)
+{
+    return (int)(c->st.person.g_milli / 1000);
 }
 
 size_t cgm_status_json(cgm_t *c, char *out, size_t cap)
@@ -694,6 +767,23 @@ size_t cgm_status_json(cgm_t *c, char *out, size_t cap)
     if (n < 0 || (size_t)n >= cap) {
         return 0;
     }
+    uint16_t next_g = 0, last_g = 0;
+    uint8_t next_f = 0xff, last_f = 0xff;
+    bool person = st->pattern == CGM_PATTERN_PERSON;
+    int64_t next_t = person ? person_next_meal(c, now, &next_g, &next_f) : 0;
+    int64_t last_t = person ? person_last_meal(c, now, &last_g, &last_f) : 0;
+    int k = snprintf(out + n, cap - n,
+                     ",\"pattern\":%u,\"insulinSource\":%u,\"isf\":%u,\"icr\":%u,\"basalNeed\":%u,"
+                     "\"trueGlucose\":%d,\"iob\":%.2f,\"nextMeal\":%lld,\"nextMealGrams\":%u,\"nextFood\":\"%s\","
+                     "\"lastMeal\":%lld,\"lastMealGrams\":%u,\"lastFood\":\"%s\"",
+                     st->pattern, st->insulin_source, st->isf, st->icr, st->basal_need,
+                     person ? cgm_person_glucose(c) : 0, person ? (double)person_insulin_acting(c) : 0.0,
+                     (long long)next_t, next_g, next_t ? cgm_food_name(next_f) : "", (long long)last_t, last_g,
+                     last_t ? cgm_food_name(last_f) : "");
+    if (k < 0 || (size_t)(n + k) >= cap) {
+        return 0;
+    }
+    n += k;
     int m = r ? snprintf(out + n, cap - n,
                          ",\"last\":{\"seq\":%u,\"t\":%u,\"glucose\":%u,\"state\":%u,\"sent\":%s}}", (unsigned)r->seq,
                          (unsigned)r->t, r->glucose, r->state, r->seq <= st->delivered ? "true" : "false")

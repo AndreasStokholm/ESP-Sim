@@ -4,6 +4,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
+#include <stddef.h>
 #include <string.h>
 
 #include "app.h"
@@ -71,8 +72,12 @@ void store_save_wifi(const char *ssid, const char *password)
 
 bool store_load_cgm(cgm_state_t *st)
 {
+    /* A save from before the virtual person is shorter: its new fields load
+     * as zero (the manual pattern), and the sensor stays the same. */
+    memset(st, 0, sizeof *st);
     size_t len = sizeof *st;
-    return nvs_get_blob(nvs, "cgm", st, &len) == ESP_OK && len == sizeof *st && st->version == CGM_STATE_VERSION;
+    return nvs_get_blob(nvs, "cgm", st, &len) == ESP_OK && len >= offsetof(cgm_state_t, pattern) &&
+           len <= sizeof *st && st->version == CGM_STATE_VERSION;
 }
 
 void store_save_cgm(void *ctx, const cgm_state_t *st)
@@ -83,5 +88,50 @@ void store_save_cgm(void *ctx, const cgm_state_t *st)
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "could not save the CGM state: %s", esp_err_to_name(err));
+    }
+}
+
+uint8_t store_load_pump(void)
+{
+    uint8_t v = 0;
+    nvs_get_u8(nvs, "pump", &v);
+    return v;
+}
+
+void store_save_pump(uint8_t pump)
+{
+    nvs_set_u8(nvs, "pump", pump);
+    nvs_commit(nvs);
+}
+
+/* The YpsoPump lets phones in without its password unless told not to. */
+bool store_load_ypso_open(void)
+{
+    uint8_t v = 1;
+    nvs_get_u8(nvs, "ypsoOpen", &v);
+    return v != 0;
+}
+
+void store_save_ypso_open(bool open)
+{
+    nvs_set_u8(nvs, "ypsoOpen", open);
+    nvs_commit(nvs);
+}
+
+bool store_load_ypso(ypso_state_t *st)
+{
+    size_t len = sizeof *st;
+    return nvs_get_blob(nvs, "ypso", st, &len) == ESP_OK && len == sizeof *st && st->version == YPSO_STATE_VERSION &&
+           st->fw < YPSO_FW_COUNT;
+}
+
+void store_save_ypso(void *ctx, const ypso_state_t *st)
+{
+    esp_err_t err = nvs_set_blob(nvs, "ypso", st, sizeof *st);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "could not save the YpsoPump state: %s", esp_err_to_name(err));
     }
 }

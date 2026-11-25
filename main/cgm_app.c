@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 
 #include "app.h"
 #include "esp_log.h"
@@ -33,6 +34,42 @@ static void log_line(void *ctx, const char *msg)
     ESP_LOGI(TAG, "%s", msg);
 }
 
+static int32_t utc_offset(void *ctx)
+{
+    time_t t = time(NULL);
+    struct tm lt, ut;
+    localtime_r(&t, &lt);
+    gmtime_r(&t, &ut);
+    lt.tm_isdst = 0;
+    return (int32_t)difftime(mktime(&lt), mktime(&ut));
+}
+
+/* What the simulated pump has put into the virtual person, hundredths of a
+ * unit. The YpsoPump counts everything it delivers. The pod counts only its
+ * boluses, so its running basal is added here at the person's basal need
+ * (its temp basals are not modelled). */
+static bool ypso_pump;
+static int64_t pod_basal_milli; /* thousandths of a hundredth */
+static int64_t pod_basal_last;
+
+static int64_t pump_insulin(void *ctx)
+{
+    if (ypso_pump) {
+        return ypso_app_delivered();
+    }
+    const dash_state_t *p = pod_state();
+    int64_t now = (int64_t)time(NULL);
+    if (pod_basal_last && p->paired && p->basal_active && !p->fault && p->reservoir > 0) {
+        int64_t dt = now - pod_basal_last;
+        if (dt > 0 && dt < 3600) {
+            uint16_t need = cgm.st.basal_need ? cgm.st.basal_need : 80;
+            pod_basal_milli += dt * need * 1000 / 3600;
+        }
+    }
+    pod_basal_last = now;
+    return (int64_t)p->delivered * 5 + pod_basal_milli / 1000;
+}
+
 static const cgm_io_t io = {
     .send = ble_cgm_send,
     .disconnect = ble_cgm_disconnect,
@@ -40,6 +77,8 @@ static const cgm_io_t io = {
     .now = now_s,
     .save = store_save_cgm,
     .log = log_line,
+    .utc_offset = utc_offset,
+    .pump_insulin = pump_insulin,
 };
 
 #define LOCKED(stmt)                           \
@@ -60,6 +99,7 @@ static void tick_task(void *arg)
 void cgm_app_start(void)
 {
     mu = xSemaphoreCreateMutex();
+    ypso_pump = store_load_pump() == 1;
     cgm_state_t st;
     if (!store_load_cgm(&st)) {
         memset(&st, 0, sizeof st);
@@ -203,6 +243,31 @@ const char *cgm_app_command(const char *body)
             return "want {\"on\": true|false}";
         }
         LOCKED(cgm_set_signal_loss(&cgm, a != 0));
+    } else if (strcmp(cmd, "cgmPattern") == 0) {
+        long pattern, source = 0, isf = 0, icr = 0, basal = 0;
+        if (!json_number(body, "pattern", &pattern) || (pattern != 0 && pattern != 1)) {
+            return "pattern is 0 (manual) or 1 (virtual person)";
+        }
+        json_number(body, "source", &source);
+        json_number(body, "isf", &isf);
+        json_number(body, "icr", &icr);
+        json_number(body, "basalNeed", &basal);
+        if ((source != 0 && source != 1) || isf < 0 || isf > 400 || icr < 0 || icr > 100 || basal < 0 ||
+            basal > 500) {
+            return "source 0 (the person's own) or 1 (the pump's); isf up to 400, icr up to 100, basalNeed up to 500";
+        }
+        LOCKED(cgm_set_pattern(&cgm, (cgm_pattern_t)pattern, (cgm_insulin_t)source, (uint16_t)isf, (uint16_t)icr,
+                               (uint16_t)basal));
+    } else if (strcmp(cmd, "cgmEat") == 0) {
+        if (!json_number(body, "grams", &a) || a < 1 || a > 200) {
+            return "grams is 1 to 200";
+        }
+        LOCKED(cgm_eat(&cgm, (uint16_t)a));
+    } else if (strcmp(cmd, "cgmExercise") == 0) {
+        if (!json_number(body, "minutes", &a) || a < 5 || a > 240) {
+            return "minutes is 5 to 240";
+        }
+        LOCKED(cgm_exercise(&cgm, (uint16_t)a));
     } else if (strcmp(cmd, "cgmSkipWarmup") == 0) {
         LOCKED(cgm_skip_warmup(&cgm));
     } else {

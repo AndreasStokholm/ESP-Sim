@@ -182,6 +182,23 @@ int dash_p256_ecdh(const uint8_t priv[32], const uint8_t peer[64], uint8_t share
 /* ECDSA with SHA-256 over msg; the signature is r || s (64 bytes). */
 int dash_p256_sign(const uint8_t priv[32], const uint8_t *msg, size_t n, uint8_t sig[64]);
 int dash_p256_verify(const uint8_t pub[64], const uint8_t *msg, size_t n, const uint8_t sig[64]);
+/* ChaCha20-Poly1305 (RFC 8439, 12-byte nonce). seal writes n bytes of
+ * ciphertext then the 16-byte tag; open takes them the same way and returns 0
+ * when the tag checks out, else -1. */
+int dash_chachapoly_seal(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *p, size_t n,
+                         uint8_t *out);
+int dash_chachapoly_open(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *in, size_t n,
+                         uint8_t *out);
+/* The raw ChaCha20 block function (RFC 8439 2.3) without the final addition:
+ * HChaCha20's core. state is 16 words in, 16 words out. */
+void dash_chacha20_rounds(uint32_t state[16]);
+/* PBKDF2-HMAC-SHA256 into a 32-byte key. Returns 0, or -1. */
+int dash_pbkdf2_sha256(const uint8_t *pass, size_t plen, const uint8_t *salt, size_t slen, uint32_t iterations,
+                       uint8_t out[32]);
+/* AES-256-GCM with a 12-byte nonce: n bytes of ciphertext, then the 16-byte tag. */
+int dash_aes256_gcm_seal(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *p, size_t n, uint8_t *out);
+/* Standard base64, padded, NUL-terminated. Returns the length, or -1 if out is too small. */
+int dash_base64(const uint8_t *p, size_t n, char *out, size_t cap);
 /* Host tests: when set, dash_random takes its bytes from here. */
 extern void (*dash_random_hook)(uint8_t *p, size_t n);
 

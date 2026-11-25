@@ -93,7 +93,8 @@ is kept byte for byte: see the tests.
 
 | Path | What |
 |---|---|
-| `components/cgmsim/` | The simulated Dexcom G6 transmitter and G7 sensor, as portable C |
+| `components/cgmsim/` | The simulated Dexcom G6 transmitter and G7 sensor, and the virtual person (`person.c`), as portable C |
+| `components/ypsosim/` | The simulated YpsoPump, as portable C |
 | `components/dashpod/` | The pod, as portable C: crypto (AES-CCM, CMAC, X25519, Milenage; AES, SHA-256 and P-256 from mbedTLS), messages, link layer, pairing (DASH and Omnipod 5), EAP-AKA, commands, responses, state machine |
 | `main/` | The ESP32 side: NimBLE GATT and advertising for both devices (`ble.c`), the CGM's clock and commands (`cgm_app.c`), NVS (`store.c`), Wi-Fi and the HTTP panel (`panel.c`, `panel.html`) |
 | `test/host/` | Host tests (macOS) |
@@ -195,7 +196,23 @@ The CGM follows the code apps use: LoopKit's
 - **Testing the app:** set a state (failed, temporary issue, expired…), or
   turn on signal loss to miss readings and see them backfilled after.
 
+**Glucose that moves like a person's.** In the CGM card, set *Glucose comes
+from* to *A virtual person*. The person runs their own day: breakfast, lunch,
+dinner and sometimes snacks, at varied times, each a food from a list with its
+own carbohydrate and speed (juice fast, porridge steady, pizza late and long).
+They treat their own lows, sometimes exercise, rise before dawn, and drift; the
+sensor adds a few mg/dL of noise and the trend arrow follows the last 15
+minutes. Their insulin is either their own (basal, and meal boluses that are
+sometimes off in size or timing, plus the odd correction), or **only what the
+simulated pump delivers**: then the AID's decisions show in the glucose. The
+YpsoPump counts everything it delivers; the pod counts its boluses and its
+running basal (its temp basals are not modelled yet). ISF, carb ratio and the
+basal need are set in the panel. It is a toy model for exercising software,
+not a physiological simulator: its numbers say nothing about any real person.
+
 Its JSON API: `GET /cgm`, and `POST /cgm` with
+`{"command": "cgmPattern", "pattern": 0|1, "source": 0|1, "isf": 45, "icr": 10, "basalNeed": 80}`,
+`{"command": "cgmEat", "grams": 20}`, `{"command": "cgmExercise", "minutes": 45}`,
 `{"command": "cgmNew", "kind": 0|6|7, "id": "81AB7Q"}`,
 `{"command": "cgmGlucose", "glucose": 120, "trend": 10}` (tenths of mg/dL per
 minute), `{"command": "cgmState", "state": 0}` (0: automatic),
@@ -204,6 +221,51 @@ minute), `{"command": "cgmState", "state": 0}` (0: automatic),
 The host tests check its messages against the byte vectors in CGMBLEKit's and
 G7SensorKit's own tests, and run whole sessions (G7; G6 watched and G6 logged
 in) against a simulated phone.
+
+## YpsoPump
+
+In the control panel's *Pump* card, choose *YpsoPump* and a firmware version;
+the board restarts as a YpsoPump instead of the pod (one pump at a time, plus
+the CGM). It follows the rockit YpsoPump driver (`rockit-driver-ypso`,
+`docs/COMMAND-SPEC.md`).
+
+| Firmware | What the driver sees |
+|---|---|
+| V05.02.03 | the hardware-validated pump: Crypto service (XChaCha20-Poly1305, counters), Control 1.4, 15-byte bolus with CRC, extended bolus, 44-byte bolus status, 20-byte system status with CRC, SAFEVAR history indexes |
+| V35.01.00 | study firmware: as V05, plus the `_alt` characteristics |
+| V65.00.06, V03.00.00 | OPN: no Crypto service (everything raw, unframed), Control 1.0 / 1.1, 8-byte SAFEVAR bolus, 13-byte bolus status, 18-byte system status, u16 history indexes, 10 % temp-basal steps |
+| V02.00.00 | the oldest baseline: no Control service |
+
+- **Credentials:** the simulated pump makes its own random session key and
+  authorisation password when it becomes a new pump. No real pump's key,
+  password, rotation table or certificate is used. *Download the key export*
+  gives a `ypso-session-export` file (rockit `docs/KEY-EXPORT.md`) carrying the
+  session and the password, sealed under a passphrase the panel shows; import
+  it with rockit's `pump-provision export` or the phone app.
+- **Bluetooth:** it advertises as `YpsoPump_<serial>` from the board's own
+  address and bonds before anything but its version strings can be read. Like
+  the real pump it pairs by passkey: when the phone asks for a code, the
+  6-digit passkey appears at the top of the panel's *YpsoPump* card (and in
+  the serial log); type that on the phone. If an earlier try left a stale
+  pairing, forget the pump on the phone and press *Forget Bluetooth bonds*.
+- **Password:** by default the simulated pump lets any phone in without its
+  authorisation password (or with any password), so rockit connects to it
+  without a key file. A real pump never does this; untick *Let any phone in*
+  in the *YpsoPump* card to need the pump's own password, from the key
+  export. The clear-text firmware (V65, V03, V02) then works with nothing to
+  import. The encrypted firmware (V05, V35) still needs the key export: its
+  messages are sealed with a session key that only the export carries.
+- **Simulated:** basal and temp basal (100 % cancels; a second one while one
+  runs is refused `0x86`), immediate, extended and combination boluses with
+  progress, stop, the settings the driver reads (serial, basal profiles A/B,
+  limits), the event history, counters, the clock, the error codes (`0x08`
+  wrong password, `0x8A` wrong key, `0x8B` counter behind, `0x81`-`0x87`).
+  The panel sets the reservoir (or no cartridge), battery, suspend, and
+  restarts the pump (reboot counter +1).
+
+The host tests check it against the driver spec's golden vectors (the pump
+CRC and an XChaCha20 frame) and run whole sessions on encrypted and clear-text
+firmware. **It has not yet been tested against the rockit driver itself.**
 
 ## License
 

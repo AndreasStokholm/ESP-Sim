@@ -97,6 +97,11 @@ static void set_clock(bool have_state)
     settimeofday(&tv, NULL);
 }
 
+const dash_state_t *pod_state(void)
+{
+    return &pod.st;
+}
+
 static void pod_task(void *arg)
 {
     dash_pod_run(&pod);
@@ -125,8 +130,20 @@ void app_main(void)
         store_save_state(NULL, &pod.st);
     }
 
-    ble_start();
+    /* The pump: the Omnipod pod, or a YpsoPump. One at a time; the panel
+     * switches between them, with a restart. */
+    bool ypso = store_load_pump() == 1;
+    if (ypso) {
+        ypso_app_start();
+        char name[24];
+        ypso_name(ypso_app_state(), name);
+        ble_start(true, ypso_app_state()->fw, name);
+    } else {
+        ble_start(false, 0, NULL);
+    }
     cgm_app_start();
     panel_start(&pod);
-    xTaskCreatePinnedToCore(pod_task, "pod", 12288, NULL, 5, NULL, tskNO_AFFINITY);
+    if (!ypso) {
+        xTaskCreatePinnedToCore(pod_task, "pod", 12288, NULL, 5, NULL, tskNO_AFFINITY);
+    }
 }
