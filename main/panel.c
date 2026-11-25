@@ -225,8 +225,9 @@ static esp_err_t post_ypso(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad request body");
         return ESP_OK;
     }
-    /* Switching the pump: {"command": "pumpSelect", "pump": 0 (pod) | 1 (YpsoPump),
-     * "podType": 0 | 1, "fw": 0-4, "fresh": true}. The board restarts. */
+    /* Switching the pump: {"command": "pumpSelect", "pump": 0 (pod) | 1 (YpsoPump)
+     * | 2 (Medtrum base), "podType": 0 | 1, "fw": 0-4, "fresh": true}. The
+     * board restarts. */
     if (strstr(body, "\"pumpSelect\"")) {
         long pump = -1, fw = -1, pod_type = -1, fresh = 0;
         const char *p;
@@ -240,8 +241,9 @@ static esp_err_t post_ypso(httpd_req_t *req)
             pod_type = strtol(strchr(p, ':') + 1, NULL, 10);
         }
         fresh = strstr(body, "\"fresh\":true") != NULL;
-        if (pump != 0 && pump != 1) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "pump is 0 (Omnipod pod) or 1 (YpsoPump)");
+        if (pump != 0 && pump != 1 && pump != 2) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "pump is 0 (Omnipod pod), 1 (YpsoPump) or 2 (Medtrum base)");
             return ESP_OK;
         }
         if (pump == 1) {
@@ -262,6 +264,9 @@ static esp_err_t post_ypso(httpd_req_t *req)
             st->fw = (uint8_t)fw;
             store_save_ypso(NULL, st);
             free(st);
+        } else if (pump == 2) {
+            /* The Medtrum base: nothing to prepare. medtrum_app_start() loads
+             * the saved base, or makes a fresh one, on the next boot. */
         } else if (pod_type == 0 || pod_type == 1) {
             char cmd[64];
             snprintf(cmd, sizeof cmd, "{\"command\":\"setPodType\",\"value\":%ld}", pod_type);
@@ -325,6 +330,48 @@ static bool json_string(const char *j, const char *key, char *out, size_t size)
     return *p == '"';
 }
 
+/* ---- the Medtrum base: GET /patch, POST /patch ------------------------------- */
+
+static esp_err_t send_patch(httpd_req_t *req)
+{
+    if (store_load_pump() != PUMP_MEDTRUM) {
+        return httpd_resp_send_404(req);
+    }
+    char json[512];
+    size_t n = medtrum_app_status_json(json, sizeof json);
+    if (n == 0) {
+        return httpd_resp_send_500(req);
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, json, (ssize_t)n);
+}
+
+static esp_err_t post_patch(httpd_req_t *req)
+{
+    if (store_load_pump() != PUMP_MEDTRUM) {
+        return httpd_resp_send_404(req);
+    }
+    char body[256];
+    if (read_body(req, body, sizeof body) < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad request body");
+        return ESP_OK;
+    }
+    /* The patch core has no crash hook, so the panel reboots the base itself:
+     * the phone loses its in-flight command and finds the base again. */
+    char cmd[32];
+    if (json_string(body, "command", cmd, sizeof cmd) && strcmp(cmd, "medtrumCrash") == 0) {
+        restart_soon();
+        return send_patch(req);
+    }
+    const char *err = medtrum_app_command(body);
+    if (err) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err);
+        return ESP_OK;
+    }
+    return send_patch(req);
+}
+
 static void restart(void *arg)
 {
     esp_restart();
@@ -377,6 +424,8 @@ void panel_start(dash_pod_t *pod)
         {.uri = "/cgm", .method = HTTP_POST, .handler = post_cgm},
         {.uri = "/ypso", .method = HTTP_GET, .handler = send_ypso},
         {.uri = "/ypso", .method = HTTP_POST, .handler = post_ypso},
+        {.uri = "/patch", .method = HTTP_GET, .handler = send_patch},
+        {.uri = "/patch", .method = HTTP_POST, .handler = post_patch},
     };
     for (size_t i = 0; i < sizeof routes / sizeof routes[0]; i++) {
         httpd_register_uri_handler(server, &routes[i]);
