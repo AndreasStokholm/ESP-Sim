@@ -171,9 +171,26 @@ static esp_err_t post_command(httpd_req_t *req)
     return send_status(req);
 }
 
-/* ---- the CGM: GET /cgm, POST /cgm {"command": ...} ---------------------------- */
+/* ---- the CGM: GET /cgm (the page), /cgm/status and /cgm/command ------------- */
 
-static esp_err_t send_cgm(httpd_req_t *req)
+/* The CGM page is the same single-page panel; its script shows only the CGM
+ * card when the path is /cgm. /g7 is the old URL: the page redirects, the API
+ * keeps the same handlers. */
+static esp_err_t get_cgm_page(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req, panel_html_start, panel_html_end - panel_html_start);
+}
+
+static esp_err_t redirect_g7(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "/cgm");
+    httpd_resp_set_type(req, "text/plain");
+    return httpd_resp_send(req, "moved to /cgm\n", HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t send_cgm_status(httpd_req_t *req)
 {
     char json[1400];
     size_t n = cgm_app_status_json(json, sizeof json);
@@ -185,7 +202,7 @@ static esp_err_t send_cgm(httpd_req_t *req)
     return httpd_resp_send(req, json, (ssize_t)n);
 }
 
-static esp_err_t post_cgm(httpd_req_t *req)
+static esp_err_t post_cgm_command(httpd_req_t *req)
 {
     char body[256];
     if (read_body(req, body, sizeof body) < 0) {
@@ -197,7 +214,7 @@ static esp_err_t post_cgm(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err);
         return ESP_OK;
     }
-    return send_cgm(req);
+    return send_cgm_status(req);
 }
 
 /* ---- the YpsoPump: GET /ypso, POST /ypso {"command": ...} ----------------------- */
@@ -419,7 +436,7 @@ void panel_start(dash_pod_t *pod)
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 12288; /* the YpsoPump's key export: PBKDF2 and AES-GCM */
-    cfg.max_uri_handlers = 12;
+    cfg.max_uri_handlers = 16;
     httpd_handle_t server = NULL;
     ESP_ERROR_CHECK(httpd_start(&server, &cfg));
     const httpd_uri_t routes[] = {
@@ -427,8 +444,12 @@ void panel_start(dash_pod_t *pod)
         {.uri = "/status", .method = HTTP_GET, .handler = send_status},
         {.uri = "/command", .method = HTTP_POST, .handler = post_command},
         {.uri = "/wifi", .method = HTTP_POST, .handler = post_wifi},
-        {.uri = "/cgm", .method = HTTP_GET, .handler = send_cgm},
-        {.uri = "/cgm", .method = HTTP_POST, .handler = post_cgm},
+        {.uri = "/cgm", .method = HTTP_GET, .handler = get_cgm_page},
+        {.uri = "/g7", .method = HTTP_GET, .handler = redirect_g7},
+        {.uri = "/cgm/status", .method = HTTP_GET, .handler = send_cgm_status},
+        {.uri = "/g7/status", .method = HTTP_GET, .handler = send_cgm_status},
+        {.uri = "/cgm/command", .method = HTTP_POST, .handler = post_cgm_command},
+        {.uri = "/g7/command", .method = HTTP_POST, .handler = post_cgm_command},
         {.uri = "/ypso", .method = HTTP_GET, .handler = send_ypso},
         {.uri = "/ypso", .method = HTTP_POST, .handler = post_ypso},
         {.uri = "/patch", .method = HTTP_GET, .handler = send_patch},
