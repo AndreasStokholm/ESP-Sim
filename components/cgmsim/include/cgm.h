@@ -139,9 +139,9 @@ typedef struct {
     uint32_t calibration_t;
     uint8_t n_hist;
     cgm_reading_t hist[CGM_HISTORY]; /* oldest first */
-    /* Added later, at the end: an older save loads with these zero, which is
-     * the manual pattern (see store_load_cgm). */
-    uint8_t pattern;        /* cgm_pattern_t */
+    /* Added after the readings, so an older save loads with these zero (the
+     * fixed pattern, see store_load_cgm). */
+    uint8_t pattern;        /* cgm_pattern_kind_t */
     uint8_t insulin_source; /* cgm_insulin_t */
     uint16_t isf;           /* the person: mg/dL one unit lowers */
     uint16_t icr;           /* grams of carbohydrate one unit covers */
@@ -175,9 +175,9 @@ typedef struct {
      * and its backfill asks for the whole history the app has not received in
      * that connection. */
     uint32_t delivered;
-    /* The backfill cursor: `delivered` when this connection began. Backfill
-     * sends the history readings after it; another central's deliveries do not
-     * move it. */
+    /* The backfill cursor. A connection starts it at 0 (cgm_on_connect()
+     * clears the whole session), so backfill sends every history reading this
+     * connection has not had; another central's deliveries do not move it. */
     uint32_t prev_delivered;
 } cgm_session_state_t;
 

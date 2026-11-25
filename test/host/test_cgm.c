@@ -548,6 +548,25 @@ static void test_g6_pairing(void)
     CHECK(find_session(CGM_CHR_BACKFILL, 1, 0, 0) >= 0);
     CHECK(find_session(CGM_CHR_CONTROL, 0x51, 0, 0) >= 0);
 
+    /* A non-zero id and a narrow range: only the requested reading, with the id
+     * echoed in the frame header and in 0x51. The two readings are 300 s apart,
+     * so a start==end at the second one covers exactly one record. */
+    clear_sent();
+    uint32_t t1 = next->t - c.st.activated;
+    uint8_t hist2[18] = {0x50, 0x05, 0x02, 0x2a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    hist2[4] = (uint8_t)t1;
+    hist2[5] = (uint8_t)(t1 >> 8);
+    hist2[6] = (uint8_t)(t1 >> 16);
+    hist2[7] = (uint8_t)(t1 >> 24);
+    memcpy(hist2 + 8, hist2 + 4, 4);
+    send_cmd(&c, hist2, sizeof hist2);
+    int bf = find_session(CGM_CHR_BACKFILL, 1, 0, 0);
+    int m51 = find_session(CGM_CHR_CONTROL, 0x51, 0, 0);
+    CHECK(bf >= 0 && fk.sent[bf].p[1] == 0x2a); /* the echoed backfill id */
+    CHECK(m51 >= 0 && fk.sent[m51].p[3] == 0x2a);
+    CHECK(m51 >= 0 && le32(fk.sent[m51].p + 4) == t1 && le32(fk.sent[m51].p + 8) == t1);
+    CHECK(m51 >= 0 && le32(fk.sent[m51].p + 12) == 14); /* 4-byte header + one 8-byte record + 2-byte frame */
+
     /* Once it has a reading, DisconnectTx is the end of this session. */
     d = fk.disconnects;
     cgm_on_write(&c, 0, CGM_CHR_CONTROL, (const uint8_t *)"\x09", 1);

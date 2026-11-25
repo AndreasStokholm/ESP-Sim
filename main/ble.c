@@ -127,9 +127,15 @@ static dash_pod_type_t adv_type;
 static bool adv_has_id, adv_has_pdm_id;
 static uint8_t adv_id[4], adv_pdm_id[4], adv_fault, adv_alerts;
 static bool cgm_adv_on;
-static bool cgm_adv_dirty; /* the core changed the window; apply it on the tick */
 static char cgm_adv_name[16];
 static uint8_t cgm_adv_addr[6];
+/* What the radio last applied. NimBLE stops an extended advertising instance
+ * when a connection completes, so the set must be re-armed even when the
+ * core's window and payload have not changed. */
+static bool cgm_adv_applied_on;
+static bool cgm_adv_applied_valid;
+static char cgm_adv_applied_name[16];
+static uint8_t cgm_adv_applied_addr[6];
 static bool medtrum_adv_on;
 static uint8_t medtrum_adv_sn[4];
 
@@ -184,6 +190,19 @@ static cgm_session_t cgm_session_for(uint16_t h)
     }
     xSemaphoreGive(cgm_mu);
     return s;
+}
+
+/* How many CGM links are in use. The advertising set stays up while a slot
+ * remains. */
+static int cgm_live_links(void)
+{
+    int n = 0;
+    xSemaphoreTake(cgm_mu, portMAX_DELAY);
+    for (int i = 0; i < CGM_MAX_SESSIONS; i++) {
+        n += cgm_links[i].used ? 1 : 0;
+    }
+    xSemaphoreGive(cgm_mu);
+    return n;
 }
 
 static void cgm_link_up(uint16_t h)
@@ -636,41 +655,57 @@ static void pod_advertise_now(void)
 }
 
 /* The core owns the CGM's advertising window (G6 continuous, G7 window, signal
- * loss, CGM off). The set is deliberately not touched when a central connects
- * or leaves: with two links it must stay up while a slot remains, and an app
- * that has just ended its session reconnects at once. */
+ * loss, CGM off), but the radio decides whether a set can still accept a
+ * central: with two links it stays up while a slot remains, and an app that
+ * has just ended its session reconnects at once. NimBLE stops the instance
+ * when a connection completes, so this is re-armed even when the window and
+ * payload have not changed. */
 static void cgm_advertise_now(void)
 {
     if (!synced) {
         return;
     }
+    int live = cgm_live_links();
     xSemaphoreTake(adv_mu, portMAX_DELAY);
-    bool on = cgm_adv_on;
+    bool on = cgm_adv_on && live < CGM_MAX_SESSIONS;
     char name[16];
     uint8_t addr[6];
     strcpy(name, cgm_adv_name);
     memcpy(addr, cgm_adv_addr, 6);
+    bool same = cgm_adv_applied_valid && on == cgm_adv_applied_on &&
+                strcmp(name, cgm_adv_applied_name) == 0 && memcmp(addr, cgm_adv_applied_addr, 6) == 0;
     xSemaphoreGive(adv_mu);
-    if (!on) {
-        if (ble_gap_ext_adv_active(CGM_INSTANCE)) {
-            ble_gap_ext_adv_stop(CGM_INSTANCE);
+
+    if (on) {
+        if (same && ble_gap_ext_adv_active(CGM_INSTANCE)) {
+            return; /* already advertising this */
         }
-        return;
+        /* Like a Dexcom: the FEBC service and the name, in the advertisement. */
+        struct ble_hs_adv_fields fields = {0};
+        fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+        fields.uuids16 = &dex_adv_uuid;
+        fields.num_uuids16 = 1;
+        fields.uuids16_is_complete = 1;
+        fields.name = (const uint8_t *)name;
+        fields.name_len = strlen(name);
+        fields.name_is_complete = 1;
+        struct ble_hs_adv_fields rsp = {0};
+        rsp.name = (const uint8_t *)name;
+        rsp.name_len = strlen(name);
+        rsp.name_is_complete = 1;
+        adv_start(CGM_INSTANCE, &fields, &rsp, addr, cgm_gap_event);
+    } else if (ble_gap_ext_adv_active(CGM_INSTANCE)) {
+        ble_gap_ext_adv_stop(CGM_INSTANCE);
+    } else if (same) {
+        return; /* already off and unchanged */
     }
-    /* Like a Dexcom: the FEBC service and the name, in the advertisement. */
-    struct ble_hs_adv_fields fields = {0};
-    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.uuids16 = &dex_adv_uuid;
-    fields.num_uuids16 = 1;
-    fields.uuids16_is_complete = 1;
-    fields.name = (const uint8_t *)name;
-    fields.name_len = strlen(name);
-    fields.name_is_complete = 1;
-    struct ble_hs_adv_fields rsp = {0};
-    rsp.name = (const uint8_t *)name;
-    rsp.name_len = strlen(name);
-    rsp.name_is_complete = 1;
-    adv_start(CGM_INSTANCE, &fields, &rsp, addr, cgm_gap_event);
+
+    xSemaphoreTake(adv_mu, portMAX_DELAY);
+    cgm_adv_applied_on = on;
+    cgm_adv_applied_valid = true;
+    strcpy(cgm_adv_applied_name, name);
+    memcpy(cgm_adv_applied_addr, addr, 6);
+    xSemaphoreGive(adv_mu);
 }
 
 /* The Medtrum base: the app scans for the name "MT" and reads the base
@@ -1036,7 +1071,9 @@ void ble_advertise(void *ctx, const dash_adv_t *adv)
 /* ---- the CGM: the radio half of cgm_io_t ---------------------------------------- */
 
 /* Sends one queued notification to the one session's link. The core emits one
- * send per session, so a phone and a watch each get their own frame. */
+ * send per session, so a phone and a watch each get their own frame. With a
+ * dozen fragments queued, NimBLE can run short of buffers for a moment: wait
+ * for one rather than lose a frame, without holding cgm_mu across the wait. */
 static void cgm_send_task(void *arg)
 {
     cgm_out_t m;
@@ -1044,26 +1081,44 @@ static void cgm_send_task(void *arg)
         if (xQueueReceive(cgm_out, &m, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-        bool gone = false, not_sub = false, failed = false;
-        xSemaphoreTake(cgm_mu, portMAX_DELAY);
-        cgm_link_t *lk = cgm_link_for_session(m.session);
-        if (!lk || lk->gen != m.gen) {
-            gone = true;
-        } else if (lk->subs[m.chr] == 0) {
-            not_sub = true;
-        } else {
-            struct os_mbuf *om = ble_hs_mbuf_from_flat(m.data, m.len);
-            if (!om) {
-                failed = true;
+        bool gone = false, not_sub = false, failed = false, no_buf = false;
+        for (int tries = 0; tries < 100; tries++) {
+            bool retry = false;
+            xSemaphoreTake(cgm_mu, portMAX_DELAY);
+            cgm_link_t *lk = cgm_link_for_session(m.session);
+            if (!lk || lk->gen != m.gen) {
+                gone = true;
+            } else if (lk->subs[m.chr] == 0) {
+                not_sub = true;
             } else {
-                int rc = (lk->subs[m.chr] & 1)
-                             ? ble_gatts_notify_custom(m.handle, dex_handle[m.chr], om)
-                             : ble_gatts_indicate_custom(m.handle, dex_handle[m.chr], om);
-                if (rc != 0) {
-                    failed = true;
+                struct os_mbuf *om = ble_hs_mbuf_from_flat(m.data, m.len);
+                if (!om) {
+                    retry = true;
+                } else {
+                    int rc = (lk->subs[m.chr] & 1)
+                                 ? ble_gatts_notify_custom(m.handle, dex_handle[m.chr], om)
+                                 : ble_gatts_indicate_custom(m.handle, dex_handle[m.chr], om);
+                    if (rc == BLE_HS_ENOMEM) {
+                        retry = true;
+                    } else if (rc != 0) {
+                        failed = true;
+                    }
                 }
             }
+            xSemaphoreGive(cgm_mu);
+            if (!retry) {
+                break;
+            }
+            if (tries == 99) {
+                no_buf = true;
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(5));
+            }
         }
+        /* Release this frame's hold on the session's hang-up exactly once,
+         * whether it was sent, dropped or exhausted. */
+        xSemaphoreTake(cgm_mu, portMAX_DELAY);
+        cgm_link_t *lk = cgm_link_for_session(m.session);
         if (lk && lk->gen == m.gen && lk->pending > 0) {
             lk->pending--;
         }
@@ -1074,6 +1129,8 @@ static void cgm_send_task(void *arg)
         if (not_sub) {
             ESP_LOGI(TAG, "cgm: %s dropped: handle 0x%04x is no longer subscribed", cgm_chr_names[m.chr],
                      m.handle);
+        } else if (no_buf) {
+            ESP_LOGW(TAG, "cgm: notification dropped: no buffers");
         } else if (failed) {
             ESP_LOGW(TAG, "cgm: notification to handle 0x%04x failed", m.handle);
         }
@@ -1147,23 +1204,16 @@ void ble_cgm_tick(void)
         ble_gap_terminate(h, BLE_ERR_REM_USER_CONN_TERM);
     }
     xSemaphoreGive(cgm_mu);
-    /* Apply an advertising change the core asked for: cgm_tick calls
-     * io->advertise from inside its own mutex, so the NimBLE host calls must
-     * wait until here, outside it. */
-    xSemaphoreTake(adv_mu, portMAX_DELAY);
-    bool dirty = cgm_adv_dirty;
-    cgm_adv_dirty = false;
-    xSemaphoreGive(adv_mu);
-    if (dirty) {
-        cgm_advertise_now();
-    }
+    /* Apply the core's window (io->advertise only records it, because it runs
+     * under the core mutex) and re-arm the set after a connect let NimBLE stop
+     * it. */
+    cgm_advertise_now();
 }
 
 void ble_cgm_advertise(void *ctx, bool on, const char *name, const uint8_t addr[6])
 {
     xSemaphoreTake(adv_mu, portMAX_DELAY);
     cgm_adv_on = on;
-    cgm_adv_dirty = true;
     strncpy(cgm_adv_name, name, sizeof cgm_adv_name - 1);
     cgm_adv_name[sizeof cgm_adv_name - 1] = 0;
     memcpy(cgm_adv_addr, addr, 6);

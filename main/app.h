@@ -42,20 +42,14 @@ void ble_medtrum_disconnect(void *ctx);
 void ble_medtrum_advertise(void *ctx, bool on, const uint8_t sn[4]);
 bool ble_medtrum_connected(void);
 
-/* cgm_app.c: the simulated Dexcom G6 or G7. The session-aware entry points are
- * what the radio calls; the sessionless names below are the old wrappers (they
- * name session 0). */
+/* cgm_app.c: the simulated Dexcom G6 or G7. The session token names the BLE
+ * link the radio is talking about. */
 void cgm_app_start(void);
 void cgm_app_on_connect_session(cgm_session_t session);
 void cgm_app_on_disconnect_session(cgm_session_t session);
 void cgm_app_on_subscribe_session(cgm_session_t session, cgm_chr_t chr, bool on);
 void cgm_app_on_write_session(cgm_session_t session, cgm_chr_t chr, const uint8_t *p, size_t n);
 size_t cgm_app_on_read_session(cgm_session_t session, cgm_chr_t chr, uint8_t *out, size_t cap);
-void cgm_app_on_connect(void);
-void cgm_app_on_disconnect(void);
-void cgm_app_on_subscribe(cgm_chr_t chr, bool on);
-void cgm_app_on_write(cgm_chr_t chr, const uint8_t *p, size_t n);
-size_t cgm_app_on_read(cgm_chr_t chr, uint8_t *out, size_t cap);
 size_t cgm_app_status_json(char *out, size_t cap);
 const char *cgm_app_command(const char *body); /* NULL, or what was wrong */
 

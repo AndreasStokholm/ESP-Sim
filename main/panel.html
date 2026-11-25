@@ -283,7 +283,7 @@
       <div><label for="cgmGlucoseIn">Value / mean / target (40–400 mg/dL)</label><input type="number" id="cgmGlucoseIn" min="40" max="400" step="1"></div>
       <div id="cgmTrendBox"><label for="cgmTrendIn">Trend (fixed only, mg/dL per minute, −5 to 5)</label><input type="number" id="cgmTrendIn" min="-5" max="5" step="0.1"></div>
       <div style="flex:0"><button class="primary" id="cgmPatternApply">Apply pattern</button></div>
-      <div style="flex:0"><button id="cgmGlucoseSet">Set glucose</button></div>
+      <div style="flex:0" id="cgmGlucoseSetBox"><button id="cgmGlucoseSet">Set glucose</button></div>
     </div>
     <div class="muted" style="margin-top:8px">A reading every 5 minutes. The virtual person eats on their own (breakfast, lunch, dinner, snacks, from a list of foods), treats their own lows, sometimes exercises; their glucose follows the insulin they get. "From the simulated pump" means only what the pod or YpsoPump delivers: the AID's decisions show in the glucose (the pod counts its boluses and its running basal; its temp basals are not modelled yet). A toy model for testing software, not a physiological simulator.</div>
     <div class="row" style="margin-top:6px">
@@ -684,6 +684,8 @@ function cgmModeView(kind){
   $('cgmAmplitudeBox').hidden = kind!=='sine';
   $('cgmPeriodBox').hidden = kind!=='sine';
   $('cgmTrendBox').hidden = kind!=='fixed';
+  /* "Set glucose" forces the fixed pattern, so only offer it there. */
+  $('cgmGlucoseSetBox').hidden = kind!=='fixed';
 }
 const hm = t=>new Date(t*1000).toLocaleTimeString([], {timeStyle:'short'});
 function showPerson(c){

@@ -162,31 +162,6 @@ size_t cgm_app_on_read_session(cgm_session_t session, cgm_chr_t chr, uint8_t *ou
     return n;
 }
 
-void cgm_app_on_connect(void)
-{
-    cgm_app_on_connect_session(0);
-}
-
-void cgm_app_on_disconnect(void)
-{
-    cgm_app_on_disconnect_session(0);
-}
-
-void cgm_app_on_subscribe(cgm_chr_t chr, bool on)
-{
-    cgm_app_on_subscribe_session(0, chr, on);
-}
-
-void cgm_app_on_write(cgm_chr_t chr, const uint8_t *p, size_t n)
-{
-    cgm_app_on_write_session(0, chr, p, n);
-}
-
-size_t cgm_app_on_read(cgm_chr_t chr, uint8_t *out, size_t cap)
-{
-    return cgm_app_on_read_session(0, chr, out, cap);
-}
-
 size_t cgm_app_status_json(char *out, size_t cap)
 {
     size_t n;
