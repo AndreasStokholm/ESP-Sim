@@ -4,6 +4,7 @@
 CORE := ../../components/dashpod
 CGM := ../../components/cgmsim
 YPSO := ../../components/ypsosim
+MED := ../../components/medtrumpatch
 IDF_PATH ?= $(HOME)/esp/esp-idf
 MBED := $(IDF_PATH)/components/mbedtls/mbedtls
 OUT := ../../.cache/host-mbedtls
@@ -19,6 +20,16 @@ MBED_OBJS := $(patsubst $(MBED)/library/%.c,$(OUT)/%.o,$(MBED_SRCS))
 test: dash_tests
 	./dash_tests
 
+# The portable Medtrum patch core: no mbedTLS and no ESP-IDF, so this compiles
+# only components/medtrumpatch and test_medtrum.c with plain cc.
+#   make -C test/host medtrum
+medtrum: medtrum_tests
+	./medtrum_tests
+
+medtrum_tests: test_medtrum.c $(wildcard $(MED)/src/*.c) $(wildcard $(MED)/include/*.h) test.h
+	$(CC) -O1 -g -fsanitize=address,undefined -std=c11 -D_DEFAULT_SOURCE $(WARN) \
+		-I$(MED)/include -I. -o $@ test_medtrum.c $(wildcard $(MED)/src/*.c)
+
 dash_tests: $(SRCS) $(wildcard $(CORE)/include/*.h) $(wildcard $(CGM)/include/*.h) $(wildcard $(YPSO)/include/*.h) $(wildcard golden_*.h) host_io.h $(OUT)/libmbedcrypto.a
 	$(CC) $(CFLAGS) $(WARN) -o $@ $(SRCS) $(OUT)/libmbedcrypto.a -lpthread
 
@@ -30,6 +41,6 @@ $(OUT)/libmbedcrypto.a: $(MBED_OBJS)
 	ar rcs $@ $^
 
 clean:
-	rm -f dash_tests
+	rm -f dash_tests medtrum_tests
 
-.PHONY: test clean
+.PHONY: test medtrum clean
