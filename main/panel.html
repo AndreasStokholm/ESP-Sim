@@ -245,9 +245,16 @@
     <p class="muted" style="color:var(--bad)">Made-up readings. Use only a test phone that controls no real pump or pod: an app reading this sensor would dose insulin from these numbers.</p>
     <div class="row">
       <div><label for="cgmPatternIn">Glucose comes from</label>
-        <select id="cgmPatternIn"><option value="1">A virtual person (meals, insulin, exercise, drift)</option><option value="0">Manual: the value and trend below</option></select></div>
+        <select id="cgmPatternIn">
+          <option value="person">A virtual person (meals, insulin, exercise, drift)</option>
+          <option value="fixed">Fixed: a value and a trend</option>
+          <option value="sine">Wave: a sine around a mean</option>
+          <option value="walk">Walk: step toward a target</option>
+        </select></div>
       <div id="cgmSourceBox"><label for="cgmSourceIn">Their insulin</label>
         <select id="cgmSourceIn"><option value="1">From the simulated pump (the AID's)</option><option value="0">Their own (basal and meal boluses)</option></select></div>
+      <div id="cgmAmplitudeBox"><label for="cgmAmplitudeIn">Wave amplitude (± mg/dL)</label><input type="number" id="cgmAmplitudeIn" min="0" max="180" step="1" value="50"></div>
+      <div id="cgmPeriodBox"><label for="cgmPeriodIn">Wave period (minutes)</label><input type="number" id="cgmPeriodIn" min="10" max="1440" step="1" value="240"></div>
     </div>
     <div class="row" id="cgmPersonRow">
       <div><label for="cgmIsfIn">ISF (mg/dL per U)</label><input type="number" id="cgmIsfIn" min="5" max="400" step="1"></div>
@@ -261,9 +268,10 @@
       <button id="cgmExercise">Exercise now (45 min)</button>
     </div>
     <div class="row" id="cgmManualRow">
-      <div><label for="cgmGlucoseIn">Glucose (40–400 mg/dL)</label><input type="number" id="cgmGlucoseIn" min="40" max="400" step="1"></div>
-      <div><label for="cgmTrendIn">Trend (mg/dL per minute, −5 to 5)</label><input type="number" id="cgmTrendIn" min="-5" max="5" step="0.1"></div>
-      <div style="flex:0"><button class="primary" id="cgmGlucoseSet">Set</button></div>
+      <div><label for="cgmGlucoseIn">Value / mean / target (40–400 mg/dL)</label><input type="number" id="cgmGlucoseIn" min="40" max="400" step="1"></div>
+      <div id="cgmTrendBox"><label for="cgmTrendIn">Trend (fixed only, mg/dL per minute, −5 to 5)</label><input type="number" id="cgmTrendIn" min="-5" max="5" step="0.1"></div>
+      <div style="flex:0"><button class="primary" id="cgmPatternApply">Apply pattern</button></div>
+      <div style="flex:0"><button id="cgmGlucoseSet">Set glucose</button></div>
     </div>
     <div class="muted" style="margin-top:8px">A reading every 5 minutes. The virtual person eats on their own (breakfast, lunch, dinner, snacks, from a list of foods), treats their own lows, sometimes exercises; their glucose follows the insulin they get. "From the simulated pump" means only what the pod or YpsoPump delivers: the AID's decisions show in the glucose (the pod counts its boluses and its running basal; its temp basals are not modelled yet). A toy model for testing software, not a physiological simulator.</div>
     <div class="row" style="margin-top:6px">
@@ -638,23 +646,39 @@ function showCgm(c){
   showPerson(c);
 }
 
-['cgmPatternIn','cgmSourceIn','cgmIsfIn','cgmIcrIn','cgmBasalIn'].forEach(id=>$(id).oninput=()=>cgmEdited[id]=true);
+['cgmPatternIn','cgmSourceIn','cgmIsfIn','cgmIcrIn','cgmBasalIn','cgmAmplitudeIn','cgmPeriodIn'].forEach(id=>$(id).oninput=()=>cgmEdited[id]=true);
 $('cgmPatternSet').onclick = ()=>{ ['cgmPatternIn','cgmSourceIn','cgmIsfIn','cgmIcrIn','cgmBasalIn'].forEach(id=>cgmEdited[id]=false);
-  cgmSend({command:'cgmPattern', pattern:+$('cgmPatternIn').value, source:+$('cgmSourceIn').value,
+  cgmSend({command:'cgmPattern', pattern:1, source:+$('cgmSourceIn').value,
     isf:Math.round(+$('cgmIsfIn').value), icr:Math.round(+$('cgmIcrIn').value), basalNeed:Math.round(+$('cgmBasalIn').value*100)}, 'Applied'); };
-$('cgmPatternIn').onchange = ()=>{ cgmEdited.cgmPatternIn=true; cgmModeView(+$('cgmPatternIn').value); };
+$('cgmPatternApply').onclick = ()=>{ const kind = $('cgmPatternIn').value;
+  const body = {command:'cgmSetPattern', pattern:kind, value:Math.round(+$('cgmGlucoseIn').value)};
+  if(kind==='fixed') body.trend = Math.round(+$('cgmTrendIn').value*10);
+  if(kind==='sine'){ body.amplitude = Math.round(+$('cgmAmplitudeIn').value); body.periodMinutes = Math.round(+$('cgmPeriodIn').value); }
+  cgmSend(body, 'Pattern applied'); };
+$('cgmPatternIn').onchange = ()=>{ cgmEdited.cgmPatternIn=true; cgmModeView($('cgmPatternIn').value); };
 $('cgmSnack').onclick = ()=>cgmSend({command:'cgmEat', grams:20}, 'The person has a snack');
 $('cgmExercise').onclick = ()=>cgmSend({command:'cgmExercise', minutes:45}, 'The person goes for a run');
-function cgmModeView(p){ $('cgmManualRow').hidden = p===1; ['cgmSourceBox','cgmPersonRow','cgmPersonInfo','cgmPersonActions'].forEach(id=>$(id).hidden = p!==1); }
+function cgmModeView(kind){
+  const person = kind==='person';
+  $('cgmPersonRow').hidden = !person;
+  ['cgmSourceBox','cgmPersonInfo','cgmPersonActions'].forEach(id=>$(id).hidden = !person);
+  $('cgmManualRow').hidden = person;
+  $('cgmAmplitudeBox').hidden = kind!=='sine';
+  $('cgmPeriodBox').hidden = kind!=='sine';
+  $('cgmTrendBox').hidden = kind!=='fixed';
+}
 const hm = t=>new Date(t*1000).toLocaleTimeString([], {timeStyle:'short'});
 function showPerson(c){
-  if(!cgmEdited.cgmPatternIn) $('cgmPatternIn').value = String(c.pattern);
+  const kind = c.pattern || 'fixed';
+  if(!cgmEdited.cgmPatternIn) $('cgmPatternIn').value = kind;
   if(!cgmEdited.cgmSourceIn) $('cgmSourceIn').value = String(c.insulinSource);
   if(!cgmEdited.cgmIsfIn && document.activeElement!==$('cgmIsfIn')) $('cgmIsfIn').value = c.isf;
   if(!cgmEdited.cgmIcrIn && document.activeElement!==$('cgmIcrIn')) $('cgmIcrIn').value = c.icr;
   if(!cgmEdited.cgmBasalIn && document.activeElement!==$('cgmBasalIn')) $('cgmBasalIn').value = (c.basalNeed/100).toFixed(2);
-  cgmModeView(cgmEdited.cgmPatternIn ? +$('cgmPatternIn').value : c.pattern);
-  if(c.pattern!==1){ $('cgmPersonInfo').textContent=''; return; }
+  if(!cgmEdited.cgmAmplitudeIn && document.activeElement!==$('cgmAmplitudeIn')) $('cgmAmplitudeIn').value = c.amplitude;
+  if(!cgmEdited.cgmPeriodIn && document.activeElement!==$('cgmPeriodIn')) $('cgmPeriodIn').value = c.periodMinutes;
+  cgmModeView(cgmEdited.cgmPatternIn ? $('cgmPatternIn').value : kind);
+  if(kind!=='person'){ $('cgmPersonInfo').textContent=''; return; }
   const parts = ['True glucose '+c.trueGlucose+' mg/dL', 'insulin on board '+c.iob.toFixed(2)+' U'];
   if(c.lastMeal) parts.push('last ate '+c.lastFood+' ('+c.lastMealGrams+' g) at '+hm(c.lastMeal));
   if(c.nextMeal) parts.push('next: '+c.nextFood+' ('+c.nextMealGrams+' g) around '+hm(c.nextMeal));

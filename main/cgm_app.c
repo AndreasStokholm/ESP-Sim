@@ -115,11 +115,15 @@ void cgm_app_start(void)
     mu = xSemaphoreCreateMutex();
     ypso_pump = store_load_pump() == 1;
     cgm_state_t st;
-    if (!store_load_cgm(&st)) {
+    /* store_load_cgm() rejects a version it does not know, but it has already
+     * read the blob into st. A version-1 save is brought forward by
+     * cgm_state_migrate() instead of being thrown away. */
+    bool loaded = store_load_cgm(&st);
+    if (!loaded && st.version != 1) {
         memset(&st, 0, sizeof st);
-        st.version = CGM_STATE_VERSION;
         st.kind = CGM_OFF;
     }
+    cgm_state_migrate(&st);
     cgm_init(&cgm, &st, &io);
     if (st.kind != CGM_OFF) {
         char name[16];
@@ -258,6 +262,8 @@ const char *cgm_app_command(const char *body)
         }
         LOCKED(cgm_set_signal_loss(&cgm, a != 0));
     } else if (strcmp(cmd, "cgmPattern") == 0) {
+        /* The older panel's selector: 0 is the manual (fixed) value/trend,
+         * 1 is the ESP-Sim virtual person. */
         long pattern, source = 0, isf = 0, icr = 0, basal = 0;
         if (!json_number(body, "pattern", &pattern) || (pattern != 0 && pattern != 1)) {
             return "pattern is 0 (manual) or 1 (virtual person)";
@@ -270,8 +276,61 @@ const char *cgm_app_command(const char *body)
             basal > 500) {
             return "source 0 (the person's own) or 1 (the pump's); isf up to 400, icr up to 100, basalNeed up to 500";
         }
-        LOCKED(cgm_set_pattern(&cgm, (cgm_pattern_t)pattern, (cgm_insulin_t)source, (uint16_t)isf, (uint16_t)icr,
-                               (uint16_t)basal));
+        if (pattern == 1) {
+            LOCKED(cgm_set_person(&cgm, (cgm_insulin_t)source, (uint16_t)isf, (uint16_t)icr, (uint16_t)basal));
+        } else {
+            LOCKED({
+                cgm_pattern_t p = {.kind = CGM_PATTERN_FIXED,
+                                   .value = cgm.st.glucose,
+                                   .trend = cgm.st.trend,
+                                   .amplitude = cgm.st.amplitude,
+                                   .period_minutes = cgm.st.period_minutes};
+                cgm_set_pattern(&cgm, &p);
+            });
+        }
+    } else if (strcmp(cmd, "cgmSetPattern") == 0) {
+        /* The fork's pattern selector: fixed keeps the manual value/trend
+         * reachable, sine takes a mean/amplitude/period, walk a target. */
+        char pname[8];
+        if (!json_str(body, "pattern", pname, sizeof pname) || strcmp(pname, "person") == 0) {
+            return "pattern is fixed, sine or walk";
+        }
+        cgm_pattern_kind_t kind;
+        if (!cgm_pattern_from_name(pname, &kind)) {
+            return "pattern is fixed, sine or walk";
+        }
+        long value = 120, trend = 0, amplitude = 50, period = 240;
+        if (!json_number(body, "value", &value) && !json_number(body, "glucose", &value)) {
+            return "value is 40 to 400";
+        }
+        if (value < 40 || value > 400) {
+            return "value is 40 to 400";
+        }
+        /* Start from what the sensor already has, so switching pattern does not
+         * reset parameters the new pattern does not use. */
+        LOCKED({
+            trend = cgm.st.trend;
+            amplitude = cgm.st.amplitude;
+            period = cgm.st.period_minutes;
+        });
+        if (kind == CGM_PATTERN_FIXED) {
+            if (json_number(body, "trend", &trend) && (trend < -127 || trend > 126)) {
+                return "trend is -127 to 126";
+            }
+        } else if (kind == CGM_PATTERN_SINE) {
+            if (json_number(body, "amplitude", &amplitude) && (amplitude < 0 || amplitude > 180)) {
+                return "amplitude is 0 to 180";
+            }
+            if (json_number(body, "periodMinutes", &period) && (period < 10 || period > 1440)) {
+                return "periodMinutes is 10 to 1440";
+            }
+        }
+        cgm_pattern_t p = {.kind = kind,
+                           .value = (uint16_t)value,
+                           .trend = (int8_t)trend,
+                           .amplitude = (uint16_t)amplitude,
+                           .period_minutes = (uint16_t)period};
+        LOCKED(cgm_set_pattern(&cgm, &p));
     } else if (strcmp(cmd, "cgmEat") == 0) {
         if (!json_number(body, "grams", &a) || a < 1 || a > 200) {
             return "grams is 1 to 200";
