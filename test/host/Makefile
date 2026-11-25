@@ -5,6 +5,7 @@ CORE := ../../components/dashpod
 CGM := ../../components/cgmsim
 YPSO := ../../components/ypsosim
 MED := ../../components/medtrumpatch
+PORTAL := ../../components/portalsim
 IDF_PATH ?= $(HOME)/esp/esp-idf
 MBED := $(IDF_PATH)/components/mbedtls/mbedtls
 OUT := ../../.cache/host-mbedtls
@@ -41,6 +42,26 @@ draw_tests: test_draw.c $(wildcard $(MED)/src/*.c) $(wildcard $(MED)/include/*.h
 serial_tests: test_serial.c $(wildcard $(MED)/include/*.h) ../../main/medtrum_serial.h
 	$(CC) $(MED_CFLAGS) -I../../main -o $@ test_serial.c $(wildcard $(MED)/src/*.c)
 
+# The captive-portal decision: portable C and no mbedTLS, so plain cc.
+#   make -C test/host portal
+PORTAL_CFLAGS := -O1 -g -fsanitize=address,undefined -std=c11 -D_DEFAULT_SOURCE $(WARN) -I$(PORTAL)/include -I.
+
+portal: portal_tests
+	./portal_tests
+
+portal_tests: test_portal.c $(wildcard $(PORTAL)/src/*.c) $(wildcard $(PORTAL)/include/*.h) test.h
+	$(CC) $(PORTAL_CFLAGS) -o $@ test_portal.c $(wildcard $(PORTAL)/src/*.c)
+
+# The captive portal's DNS answer builder: pure C, compiled with plain cc.
+#   make -C test/host dns
+DNS_CFLAGS := -O1 -g -fsanitize=address,undefined -std=c11 -D_DEFAULT_SOURCE $(WARN) -I../../main -I.
+
+dns: dns_tests
+	./dns_tests
+
+dns_tests: test_dns.c ../../main/dns_answer.c ../../main/dns_answer.h test.h
+	$(CC) $(DNS_CFLAGS) -o $@ test_dns.c ../../main/dns_answer.c
+
 dash_tests: $(SRCS) $(wildcard $(CORE)/include/*.h) $(wildcard $(CGM)/include/*.h) $(wildcard $(YPSO)/include/*.h) $(wildcard golden_*.h) host_io.h $(OUT)/libmbedcrypto.a
 	$(CC) $(CFLAGS) $(WARN) -o $@ $(SRCS) $(OUT)/libmbedcrypto.a -lpthread -lm
 
@@ -52,6 +73,6 @@ $(OUT)/libmbedcrypto.a: $(MBED_OBJS)
 	ar rcs $@ $^
 
 clean:
-	rm -f dash_tests medtrum_tests draw_tests serial_tests
+	rm -f dash_tests medtrum_tests draw_tests serial_tests portal_tests dns_tests
 
-.PHONY: test medtrum clean
+.PHONY: test medtrum portal dns clean

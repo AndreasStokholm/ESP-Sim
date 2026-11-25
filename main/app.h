@@ -110,3 +110,14 @@ void store_save_cgm(void *ctx, const cgm_state_t *st);
 
 /* panel.c: Wi-Fi (station or access point) and the HTTP control panel. */
 void panel_start(dash_pod_t *pod);
+/* Whether the station is on a joined network (it has an address). */
+bool panel_sta_joined(void);
+/* Whether the board is running its own access point, and its credentials. */
+bool panel_ap_active(void);
+void panel_ap_credentials(char ssid[33], char pass[17]);
+/* The panel's restart-after-a-second path, shared by the page handlers. */
+void panel_restart_soon(void);
+
+/* dns.c: the captive portal's DNS responder, started and stopped with the AP. */
+void dns_start(void);
+void dns_stop(void);
