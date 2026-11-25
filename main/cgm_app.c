@@ -70,9 +70,23 @@ static int64_t pump_insulin(void *ctx)
     return (int64_t)p->delivered * 5 + pod_basal_milli / 1000;
 }
 
+/* The radio's CGM half is still one link at a time (the session mapping is the
+ * radio-glue step); the core is handed every event as session 0. */
+static void io_send(void *ctx, cgm_session_t session, cgm_chr_t chr, const uint8_t *p, size_t n)
+{
+    (void)session;
+    ble_cgm_send(ctx, chr, p, n);
+}
+
+static void io_disconnect(void *ctx, cgm_session_t session)
+{
+    (void)session;
+    ble_cgm_disconnect(ctx);
+}
+
 static const cgm_io_t io = {
-    .send = ble_cgm_send,
-    .disconnect = ble_cgm_disconnect,
+    .send = io_send,
+    .disconnect = io_disconnect,
     .advertise = ble_cgm_advertise,
     .now = now_s,
     .save = store_save_cgm,
@@ -118,28 +132,28 @@ void cgm_app_start(void)
 
 void cgm_app_on_connect(void)
 {
-    LOCKED(cgm_on_connect(&cgm));
+    LOCKED(cgm_on_connect(&cgm, 0));
 }
 
 void cgm_app_on_disconnect(void)
 {
-    LOCKED(cgm_on_disconnect(&cgm); cgm_tick(&cgm));
+    LOCKED(cgm_on_disconnect(&cgm, 0); cgm_tick(&cgm));
 }
 
 void cgm_app_on_subscribe(cgm_chr_t chr, bool on)
 {
-    LOCKED(cgm_on_subscribe(&cgm, chr, on));
+    LOCKED(cgm_on_subscribe(&cgm, 0, chr, on));
 }
 
 void cgm_app_on_write(cgm_chr_t chr, const uint8_t *p, size_t n)
 {
-    LOCKED(cgm_on_write(&cgm, chr, p, n));
+    LOCKED(cgm_on_write(&cgm, 0, chr, p, n));
 }
 
 size_t cgm_app_on_read(cgm_chr_t chr, uint8_t *out, size_t cap)
 {
     size_t n;
-    LOCKED(n = cgm_on_read(&cgm, chr, out, cap));
+    LOCKED(n = cgm_on_read(&cgm, 0, chr, out, cap));
     return n;
 }
 

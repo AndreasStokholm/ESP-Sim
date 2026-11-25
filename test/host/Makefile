@@ -42,7 +42,7 @@ serial_tests: test_serial.c $(wildcard $(MED)/include/*.h) ../../main/medtrum_se
 	$(CC) $(MED_CFLAGS) -I../../main -o $@ test_serial.c $(wildcard $(MED)/src/*.c)
 
 dash_tests: $(SRCS) $(wildcard $(CORE)/include/*.h) $(wildcard $(CGM)/include/*.h) $(wildcard $(YPSO)/include/*.h) $(wildcard golden_*.h) host_io.h $(OUT)/libmbedcrypto.a
-	$(CC) $(CFLAGS) $(WARN) -o $@ $(SRCS) $(OUT)/libmbedcrypto.a -lpthread
+	$(CC) $(CFLAGS) $(WARN) -o $@ $(SRCS) $(OUT)/libmbedcrypto.a -lpthread -lm
 
 $(OUT)/%.o: $(MBED)/library/%.c
 	@mkdir -p $(OUT)
