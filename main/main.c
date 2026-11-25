@@ -130,20 +130,23 @@ void app_main(void)
         store_save_state(NULL, &pod.st);
     }
 
-    /* The pump: the Omnipod pod, or a YpsoPump. One at a time; the panel
-     * switches between them, with a restart. */
-    bool ypso = store_load_pump() == 1;
-    if (ypso) {
+    /* The pump: an Omnipod pod, a YpsoPump or a Medtrum base. One at a time;
+     * the panel switches between them, with a restart. */
+    uint8_t pump = store_load_pump();
+    if (pump == PUMP_YPSO) {
         ypso_app_start();
         char name[24];
         ypso_name(ypso_app_state(), name);
-        ble_start(true, ypso_app_state()->fw, name);
+        ble_start(PUMP_YPSO, ypso_app_state()->fw, name);
     } else {
-        ble_start(false, 0, NULL);
+        ble_start(pump, 0, NULL); /* the pod, or the Medtrum base */
     }
     cgm_app_start();
+    if (pump == PUMP_MEDTRUM) {
+        medtrum_app_start();
+    }
     panel_start(&pod);
-    if (!ypso) {
+    if (pump == PUMP_POD) {
         xTaskCreatePinnedToCore(pod_task, "pod", 12288, NULL, 5, NULL, tskNO_AFFINITY);
     }
 }

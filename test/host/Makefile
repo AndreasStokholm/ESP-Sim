@@ -4,6 +4,7 @@
 CORE := ../../components/dashpod
 CGM := ../../components/cgmsim
 YPSO := ../../components/ypsosim
+MED := ../../components/medtrumpatch
 IDF_PATH ?= $(HOME)/esp/esp-idf
 MBED := $(IDF_PATH)/components/mbedtls/mbedtls
 OUT := ../../.cache/host-mbedtls
@@ -19,6 +20,27 @@ MBED_OBJS := $(patsubst $(MBED)/library/%.c,$(OUT)/%.o,$(MBED_SRCS))
 test: dash_tests
 	./dash_tests
 
+# The portable Medtrum patch core: no mbedTLS and no ESP-IDF, so this compiles
+# only components/medtrumpatch and the Medtrum tests with plain cc.
+#   make -C test/host medtrum
+MED_CFLAGS := -O1 -g -fsanitize=address,undefined -std=c11 -D_DEFAULT_SOURCE $(WARN) -I$(MED)/include -I.
+
+medtrum: medtrum_tests draw_tests serial_tests
+	./medtrum_tests
+	./draw_tests
+	./serial_tests
+
+# The core byte vectors, the delivery draw and the serial/model helpers. The
+# serial test pins main/medtrum_serial.h, the same header the panel uses.
+medtrum_tests: test_medtrum.c $(wildcard $(MED)/src/*.c) $(wildcard $(MED)/include/*.h) test.h
+	$(CC) $(MED_CFLAGS) -o $@ test_medtrum.c $(wildcard $(MED)/src/*.c)
+
+draw_tests: test_draw.c $(wildcard $(MED)/src/*.c) $(wildcard $(MED)/include/*.h) test.h
+	$(CC) $(MED_CFLAGS) -o $@ test_draw.c $(wildcard $(MED)/src/*.c)
+
+serial_tests: test_serial.c $(wildcard $(MED)/include/*.h) ../../main/medtrum_serial.h
+	$(CC) $(MED_CFLAGS) -I../../main -o $@ test_serial.c $(wildcard $(MED)/src/*.c)
+
 dash_tests: $(SRCS) $(wildcard $(CORE)/include/*.h) $(wildcard $(CGM)/include/*.h) $(wildcard $(YPSO)/include/*.h) $(wildcard golden_*.h) host_io.h $(OUT)/libmbedcrypto.a
 	$(CC) $(CFLAGS) $(WARN) -o $@ $(SRCS) $(OUT)/libmbedcrypto.a -lpthread
 
@@ -30,6 +52,6 @@ $(OUT)/libmbedcrypto.a: $(MBED_OBJS)
 	ar rcs $@ $^
 
 clean:
-	rm -f dash_tests
+	rm -f dash_tests medtrum_tests draw_tests serial_tests
 
-.PHONY: test clean
+.PHONY: test medtrum clean
