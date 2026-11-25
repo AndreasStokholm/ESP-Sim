@@ -340,6 +340,9 @@ static bool json_str(const char *j, const char *key, char *out, size_t cap)
 
 size_t medtrum_app_status_json(char *out, size_t cap)
 {
+    if (mu == NULL) {
+        return 0; /* the app has not started; no lock to take */
+    }
     size_t n;
     LOCKED({
         uint16_t id = (uint16_t)(patch.delivery.patch_id[0] | (patch.delivery.patch_id[1] << 8));
@@ -361,6 +364,9 @@ size_t medtrum_app_status_json(char *out, size_t cap)
  * "medtrumSetFault" {state}, "medtrumReset". Returns NULL, or what was wrong. */
 const char *medtrum_app_command(const char *body)
 {
+    if (mu == NULL) {
+        return "the Medtrum base is not running";
+    }
     char cmd[32], hex[16];
     long v;
     if (!json_str(body, "command", cmd, sizeof cmd)) {

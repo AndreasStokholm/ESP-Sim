@@ -25,6 +25,12 @@
 
 static const char *TAG = "panel";
 static dash_pod_t *the_pod;
+/* The pump the running apps started as, read once at boot. The NVS value
+ * changes the moment the panel schedules a switch, a second before the board
+ * restarts, and the app for the new mode is not running yet: gating the
+ * per-pump routes on the NVS value would call into an app whose mutex is still
+ * NULL. */
+static uint8_t boot_pump;
 
 extern const char panel_html_start[] asm("_binary_panel_html_start");
 extern const char panel_html_end[] asm("_binary_panel_html_end");
@@ -200,7 +206,7 @@ static esp_err_t send_ypso(httpd_req_t *req)
 {
     char json[900];
     size_t n;
-    if (store_load_pump() == 1) {
+    if (boot_pump == PUMP_YPSO) {
         n = ypso_app_status_json(json, sizeof json);
         if (n == 0 || n + 20 > sizeof json) {
             return httpd_resp_send_500(req);
@@ -270,7 +276,7 @@ static esp_err_t post_ypso(httpd_req_t *req)
         } else if (pod_type == 0 || pod_type == 1) {
             char cmd[64];
             snprintf(cmd, sizeof cmd, "{\"command\":\"setPodType\",\"value\":%ld}", pod_type);
-            if (store_load_pump() == 1 || pod_type != the_pod->st.pod_type) {
+            if (boot_pump == PUMP_YPSO || pod_type != the_pod->st.pod_type) {
                 dash_pod_panel_command(the_pod, cmd, strlen(cmd));
             }
         }
@@ -283,7 +289,7 @@ static esp_err_t post_ypso(httpd_req_t *req)
     if (!reply) {
         return httpd_resp_send_500(req);
     }
-    const char *err = store_load_pump() == 1 ? ypso_app_command(body, reply, 2400) : "the board is not a YpsoPump";
+    const char *err = boot_pump == PUMP_YPSO ? ypso_app_command(body, reply, 2400) : "the board is not a YpsoPump";
     esp_err_t r;
     if (err) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err);
@@ -334,7 +340,7 @@ static bool json_string(const char *j, const char *key, char *out, size_t size)
 
 static esp_err_t send_patch(httpd_req_t *req)
 {
-    if (store_load_pump() != PUMP_MEDTRUM) {
+    if (boot_pump != PUMP_MEDTRUM) {
         return httpd_resp_send_404(req);
     }
     char json[512];
@@ -349,7 +355,7 @@ static esp_err_t send_patch(httpd_req_t *req)
 
 static esp_err_t post_patch(httpd_req_t *req)
 {
-    if (store_load_pump() != PUMP_MEDTRUM) {
+    if (boot_pump != PUMP_MEDTRUM) {
         return httpd_resp_send_404(req);
     }
     char body[256];
@@ -408,6 +414,7 @@ static esp_err_t post_wifi(httpd_req_t *req)
 void panel_start(dash_pod_t *pod)
 {
     the_pod = pod;
+    boot_pump = store_load_pump();
     wifi_start();
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
