@@ -42,16 +42,28 @@
   th { color:var(--mut); font-weight:500; }
   .muted { color:var(--mut); font-size:13px; }
   footer { max-width:760px; margin:0 auto; padding:4px 16px 24px; color:var(--mut); font-size:12px; }
+  nav { display:flex; flex-wrap:wrap; gap:2px 18px; align-items:baseline; padding:12px 16px; border-bottom:1px solid var(--line); max-width:760px; margin:0 auto; }
+  nav .brand { font-weight:600; margin-right:auto; }
+  nav a { color:var(--mut); text-decoration:none; font-size:14px; }
+  nav a:hover { color:var(--fg); }
+  nav a.active { color:var(--accent); }
+  .openLink { float:right; font-size:12px; text-transform:none; letter-spacing:0; }
+  body.cgm-page .page-home { display:none !important; }
 </style>
 </head>
 <body>
+<nav>
+  <span class="brand">ESP-Sim</span>
+  <a href="/" id="navHome">Home</a>
+  <a href="/cgm" id="navCgm">CGM</a>
+</nav>
 <header>
   <h1 id="title">DASH pod</h1>
-  <span class="meta" id="podid"></span>
-  <span class="chip" id="link" role="status">—</span>
+  <span class="meta page-home" id="podid"></span>
+  <span class="chip page-home" id="link" role="status">—</span>
 </header>
 <main>
-  <section class="card" aria-labelledby="h-status">
+  <section class="card page-home" aria-labelledby="h-status">
     <h2 id="h-status">Pod</h2>
     <div class="big">
       <span class="val" id="reservoir">—</span>
@@ -69,7 +81,7 @@
     </dl>
   </section>
 
-  <section class="card" aria-labelledby="h-res">
+  <section class="card page-home" aria-labelledby="h-res">
     <h2 id="h-res">Reservoir</h2>
     <div class="row">
       <div><label for="resIn">Units in the reservoir (0–200)</label><input type="number" id="resIn" min="0" max="200" step="0.05"></div>
@@ -78,7 +90,7 @@
     <div class="muted" style="margin-top:8px">The pod reports the level only below 50 U; above that it reports “50+ U”.</div>
   </section>
 
-  <section class="card" aria-labelledby="h-age">
+  <section class="card page-home" aria-labelledby="h-age">
     <h2 id="h-age">Pod age</h2>
     <div class="row">
       <div><label for="ageIn">Hours since activation</label><input type="number" id="ageIn" min="0" max="100" step="0.25"></div>
@@ -94,13 +106,13 @@
     <div class="muted" style="margin-top:8px">At 80 hours the pod faults with 0x1C at the next command.</div>
   </section>
 
-  <section class="card" aria-labelledby="h-alerts">
+  <section class="card page-home" aria-labelledby="h-alerts">
     <h2 id="h-alerts">Active alerts</h2>
     <div class="checks" id="alertChecks"></div>
     <div class="actions"><button class="primary" id="alertsSet">Set alerts</button></div>
   </section>
 
-  <section class="card" aria-labelledby="h-fault">
+  <section class="card page-home" aria-labelledby="h-fault">
     <h2 id="h-fault">Fault</h2>
     <label for="faultIn">Fault code</label>
     <select id="faultIn"></select>
@@ -110,7 +122,7 @@
     </div>
   </section>
 
-  <section class="card" aria-labelledby="h-crash">
+  <section class="card page-home" aria-labelledby="h-crash">
     <h2 id="h-crash">Unacknowledged command</h2>
     <div class="actions" style="margin-top:0">
       <button class="danger" id="crashBefore">Crash before processing next command</button>
@@ -119,7 +131,7 @@
     <div class="muted" style="margin-top:8px" id="crashNote">The ESP32 reboots at the next command that changes delivery, leaving the phone without a response, then comes back as the same pod. Watch how the app recovers.</div>
   </section>
 
-  <section class="card" aria-labelledby="h-type">
+  <section class="card page-home" aria-labelledby="h-type">
     <h2 id="h-type">Pump</h2>
     <div class="row">
       <div><label for="typeIn">Simulate</label>
@@ -137,7 +149,7 @@
     <div class="muted" style="margin-top:8px">One pump at a time; the board restarts to switch. Switching between DASH and Omnipod 5 forgets the pod. Changing only the YpsoPump's firmware keeps the same pump (key, serial, history) unless "as a new YpsoPump" is ticked.</div>
   </section>
 
-  <section class="card" aria-labelledby="h-ypso" id="ypsoCard" hidden>
+  <section class="card page-home" aria-labelledby="h-ypso" id="ypsoCard" hidden>
     <h2 id="h-ypso">YpsoPump</h2>
     <div id="ypPassBox" hidden style="margin-bottom:12px;padding:12px;border-radius:10px;border:2px solid var(--accent, #2a6)">
       <div class="muted">The phone is pairing: type this passkey on the phone</div>
@@ -177,7 +189,7 @@
     <div class="muted" style="margin-top:8px">The export carries this simulated pump's own session key and password (made at random, no real pump's), sealed under the passphrase shown. Import it with rockit's <code>pump-provision export</code> or the phone app. The pump pairs over Bluetooth by passkey the first time the phone connects: type the number shown at the top of this card. The key export is needed only when the box above is unticked, or for the encrypted firmware (V05, V35), whose messages need the session key.</div>
   </section>
 
-  <section class="card" id="patchCard" aria-labelledby="h-patch" hidden>
+  <section class="card page-home" id="patchCard" aria-labelledby="h-patch" hidden>
     <h2 id="h-patch">Medtrum patch</h2>
     <div class="big">
       <span class="val" id="patchReservoir">—</span>
@@ -222,14 +234,14 @@
     <div class="muted" style="margin-top:8px" id="patchNote">The base carries the radio; the patch is the disposable half. A new patch clears the activation so the phone activates a fresh one. “Crash next command” reboots the base, leaving the phone without a response, then comes back as the same base.</div>
   </section>
 
-  <section class="card" aria-labelledby="h-newpod">
+  <section class="card page-home" aria-labelledby="h-newpod">
     <h2 id="h-newpod">New pod</h2>
     <div class="actions" style="margin-top:0"><button class="danger" id="newPod">Forget this pod and start a new one</button></div>
     <div class="muted" style="margin-top:8px">Clears pairing and delivery: the next phone pairs it as a fresh pod. Deactivating the pod from the app does the same.</div>
   </section>
 
   <section class="card" aria-labelledby="h-cgm">
-    <h2 id="h-cgm">CGM</h2>
+    <h2 id="h-cgm">CGM <a class="openLink" href="/cgm">open page</a></h2>
     <div class="big">
       <span class="val" id="cgmGlucose">—</span>
       <span class="unit">mg/dL last reading</span>
@@ -301,7 +313,7 @@
     <div class="muted" style="margin-top:8px">G6: enter the transmitter ID in the app. G7: the app finds the sensor (DXCM…) by itself. Both are found alongside the pod.</div>
   </section>
 
-  <section class="card" aria-labelledby="h-wifi">
+  <section class="card page-home" aria-labelledby="h-wifi">
     <h2 id="h-wifi">Wi-Fi</h2>
     <label for="wifiSsid">Network name</label> <input id="wifiSsid" autocomplete="off">
     <label for="wifiPass">Password</label> <input id="wifiPass" type="password" autocomplete="off">
@@ -309,7 +321,7 @@
     <div class="muted" style="margin-top:8px">Joining a network gives the pod the right time and puts this panel on your LAN; the board prints its address on the serial console. Without one it runs its own access point.</div>
   </section>
 
-  <section class="card" aria-labelledby="h-comms">
+  <section class="card page-home" aria-labelledby="h-comms">
     <h2 id="h-comms">Comms</h2>
     <table><tbody>
       <tr><th scope="row">Message sequence</th><td id="msgSeq">—</td></tr>
@@ -453,6 +465,12 @@ const time = iso=>new Date(iso).toLocaleTimeString([], {timeStyle:'short'});
 const faultName = c=>{ const f=FAULTS.find(f=>f[0]===c); return f ? f[1] : 'unknown'; };
 let last = {}, edited = {};
 
+/* The one page is both the home and the /cgm page: on /cgm only the CGM card
+ * is shown, and the title and nav say so. /g7 redirects here on the server. */
+const cgmPage = location.pathname === '/cgm' || location.pathname === '/g7';
+if(cgmPage){ document.body.classList.add('cgm-page'); document.title = 'CGM'; $('navCgm').classList.add('active'); }
+else { $('navHome').classList.add('active'); }
+
 ALERTS.forEach((n,i)=>{ const l=document.createElement('label');
   l.innerHTML='<input type="checkbox" data-slot="'+i+'"> '+n+' ('+i+')'; $('alertChecks').appendChild(l); });
 $('faultIn').innerHTML = FAULTS.map(f=>'<option value="'+f[0]+'">'+hex(f[0])+' — '+f[1].replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</option>').join('');
@@ -513,7 +531,7 @@ function chip(el, text, cls){ el.textContent=text; el.className='chip '+(cls||''
 function show(s){
   last = s;
   if(ypActive || patchOn) return; /* the YpsoPump or Medtrum card speaks for the pump */
-  $('title').textContent = (s.podType || 'DASH') + ' pod';
+  if(!cgmPage) $('title').textContent = (s.podType || 'DASH') + ' pod';
   if(!edited.type && !ypActive) $('typeIn').value = s.podType === 'Omnipod 5' ? '1' : '0';
   $('podid').textContent = s.id ? 'id '+s.id : (s.paired ? '' : 'not paired');
   chip($('link'), s.connected ? 'connected' : 'not connected', s.connected ? 'ok' : '');
@@ -579,7 +597,7 @@ function showYpso(y){
   pumpCards();
   if(!ypActive) return;
   ypLast = y;
-  $('title').textContent = 'YpsoPump';
+  if(!cgmPage) $('title').textContent = 'YpsoPump';
   $('podid').textContent = y.name;
   chip($('link'), y.connected ? 'connected' : 'not connected', y.connected ? 'ok' : '');
   if(!edited.type){ $('typeIn').value='2'; $('fwIn').value=String(y.fw); $('fwBox').hidden=false; }
@@ -608,7 +626,7 @@ let cgmEdited = {};
 ['cgmGlucoseIn','cgmTrendIn','cgmStateIn','cgmKindIn'].forEach(id=>$(id).oninput=()=>cgmEdited[id]=true);
 async function cgmSend(body, done){
   try {
-    const r = await fetch('/cgm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const r = await fetch('/cgm/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const t = await r.text();
     if(!r.ok) throw new Error(t.trim());
     showCgm(JSON.parse(t)); say(done);
@@ -626,10 +644,11 @@ $('cgmNew').onclick = ()=>{ const k=+$('cgmKindIn').value, id=$('cgmIdIn').value
   if(k && !confirm('Start '+what+'? Use it only with a test phone that controls no real pump or pod.')) return;
   cgmEdited.cgmKindIn=false; cgmSend({command:'cgmNew', kind:k, id:id}, k ? 'Started '+what : 'CGM off'); };
 function showCgm(c){
-  const now = Date.now()/1000;
+  const now = c.now || Date.now()/1000;
   if(!cgmEdited.cgmKindIn) $('cgmKindIn').value = String(c.kind);
-  if(!c.kind){ $('cgmGlucose').textContent='—'; chip($('cgmState'),'off');
+  if(!c.kind){ cgmStatus = null; $('cgmGlucose').textContent='—'; chip($('cgmState'),'off');
     ['cgmDevice','cgmAge','cgmLast','cgmNext','cgmLink'].forEach(id=>$(id).textContent='—'); return; }
+  cgmStatus = c; cgmFetched = performance.now(); cgmCountdown();
   $('cgmGlucose').textContent = c.last && c.last.glucose ? c.last.glucose : c.glucose;
   const st = CGM_STATES[c.state] || ('state '+c.state);
   chip($('cgmState'), st+(c.forcedState?' (set)':''), c.state===6 ? 'ok' : c.state===2 ? 'warn' : 'bad');
@@ -637,7 +656,6 @@ function showCgm(c){
   $('cgmAge').textContent = ago(now-(c.kind===6 ? c.sessionStart||now : c.activated))+(c.kind===6 && !c.sessionStart ? ' (no session)' : '')
     +(c.warmupDone>now ? ', warm-up ends in '+ago(c.warmupDone-now) : '');
   $('cgmLast').textContent = c.last ? (c.last.glucose ? c.last.glucose+' mg/dL' : 'no glucose')+', '+ago(now-c.last.t)+' ago, '+(c.last.sent ? 'sent' : 'not yet sent') : 'none';
-  $('cgmNext').textContent = 'in '+ago(c.nextReading-now);
   $('cgmLink').textContent = c.connected ? 'phone connected' : c.signalLoss ? 'signal loss: not advertising' : c.advertising ? 'advertising' : 'waiting for the next reading';
   if(!cgmEdited.cgmGlucoseIn && document.activeElement!==$('cgmGlucoseIn')) $('cgmGlucoseIn').value = c.glucose;
   if(!cgmEdited.cgmTrendIn && document.activeElement!==$('cgmTrendIn')) $('cgmTrendIn').value = c.trend/10;
@@ -684,7 +702,17 @@ function showPerson(c){
   if(c.nextMeal) parts.push('next: '+c.nextFood+' ('+c.nextMealGrams+' g) around '+hm(c.nextMeal));
   $('cgmPersonInfo').textContent = parts.join(' · ');
 }
-async function refreshCgm(){ try { showCgm(await (await fetch('/cgm')).json()); } catch(e){} }
+/* The next reading's countdown: mm:ss from the status's own clock (now /
+ * nextReading), ticked once a second and clamped at 0:00. */
+let cgmStatus = null, cgmFetched = 0;
+function cgmCountdown(){
+  if(!cgmStatus || !cgmStatus.kind) return;
+  const elapsed = (performance.now() - cgmFetched)/1000;
+  let s = Math.max(0, Math.round(cgmStatus.nextReading - (cgmStatus.now + elapsed)));
+  $('cgmNext').textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+}
+setInterval(cgmCountdown, 1000);
+async function refreshCgm(){ try { showCgm(await (await fetch('/cgm/status')).json()); } catch(e){} }
 refreshCgm(); setInterval(refreshCgm, 2000);
 
 /* ---- Medtrum patch ---- */
@@ -726,7 +754,7 @@ $('patchCrash').onclick = ()=>{ if(confirm('Reboot the base at the next command?
 $('patchNew').onclick = ()=>{ if(confirm('Forget this patch? The phone will need to activate a new one.')) patchSend({command:'medtrumReset'}, 'New patch ready'); };
 function showPatch(p){
   patchOn = true; pumpCards();
-  $('title').textContent = 'Medtrum patch';
+  if(!cgmPage) $('title').textContent = 'Medtrum patch';
   if(!edited.type) $('typeIn').value = '3';
   $('podid').textContent = p.serial;
   chip($('link'), p.connected ? 'connected' : 'not connected', p.connected ? 'ok' : '');

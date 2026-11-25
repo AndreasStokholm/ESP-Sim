@@ -70,18 +70,16 @@ static int64_t pump_insulin(void *ctx)
     return (int64_t)p->delivered * 5 + pod_basal_milli / 1000;
 }
 
-/* The radio's CGM half is still one link at a time (the session mapping is the
- * radio-glue step); the core is handed every event as session 0. */
+/* The radio names the session on every call; the queue and the deferred
+ * hang-up live in ble.c. */
 static void io_send(void *ctx, cgm_session_t session, cgm_chr_t chr, const uint8_t *p, size_t n)
 {
-    (void)session;
-    ble_cgm_send(ctx, chr, p, n);
+    ble_cgm_send_session(session, chr, p, n);
 }
 
 static void io_disconnect(void *ctx, cgm_session_t session)
 {
-    (void)session;
-    ble_cgm_disconnect(ctx);
+    ble_cgm_disconnect_session(session);
 }
 
 static const cgm_io_t io = {
@@ -134,31 +132,59 @@ void cgm_app_start(void)
     xTaskCreatePinnedToCore(tick_task, "cgm", 4096, NULL, 4, NULL, tskNO_AFFINITY);
 }
 
+/* The radio names the central it is talking about: one core session per BLE
+ * link, up to CGM_MAX_SESSIONS. The sessionless entry points below keep the
+ * app.h contract for any caller that has not been re-signed. */
+void cgm_app_on_connect_session(cgm_session_t session)
+{
+    LOCKED(cgm_on_connect(&cgm, session));
+}
+
+void cgm_app_on_disconnect_session(cgm_session_t session)
+{
+    LOCKED(cgm_on_disconnect(&cgm, session));
+}
+
+void cgm_app_on_subscribe_session(cgm_session_t session, cgm_chr_t chr, bool on)
+{
+    LOCKED(cgm_on_subscribe(&cgm, session, chr, on));
+}
+
+void cgm_app_on_write_session(cgm_session_t session, cgm_chr_t chr, const uint8_t *p, size_t n)
+{
+    LOCKED(cgm_on_write(&cgm, session, chr, p, n));
+}
+
+size_t cgm_app_on_read_session(cgm_session_t session, cgm_chr_t chr, uint8_t *out, size_t cap)
+{
+    size_t n;
+    LOCKED(n = cgm_on_read(&cgm, session, chr, out, cap));
+    return n;
+}
+
 void cgm_app_on_connect(void)
 {
-    LOCKED(cgm_on_connect(&cgm, 0));
+    cgm_app_on_connect_session(0);
 }
 
 void cgm_app_on_disconnect(void)
 {
-    LOCKED(cgm_on_disconnect(&cgm, 0); cgm_tick(&cgm));
+    cgm_app_on_disconnect_session(0);
 }
 
 void cgm_app_on_subscribe(cgm_chr_t chr, bool on)
 {
-    LOCKED(cgm_on_subscribe(&cgm, 0, chr, on));
+    cgm_app_on_subscribe_session(0, chr, on);
 }
 
 void cgm_app_on_write(cgm_chr_t chr, const uint8_t *p, size_t n)
 {
-    LOCKED(cgm_on_write(&cgm, 0, chr, p, n));
+    cgm_app_on_write_session(0, chr, p, n);
 }
 
 size_t cgm_app_on_read(cgm_chr_t chr, uint8_t *out, size_t cap)
 {
-    size_t n;
-    LOCKED(n = cgm_on_read(&cgm, 0, chr, out, cap));
-    return n;
+    return cgm_app_on_read_session(0, chr, out, cap);
 }
 
 size_t cgm_app_status_json(char *out, size_t cap)
@@ -280,11 +306,12 @@ const char *cgm_app_command(const char *body)
             LOCKED(cgm_set_person(&cgm, (cgm_insulin_t)source, (uint16_t)isf, (uint16_t)icr, (uint16_t)basal));
         } else {
             LOCKED({
-                cgm_pattern_t p = {.kind = CGM_PATTERN_FIXED,
-                                   .value = cgm.st.glucose,
-                                   .trend = cgm.st.trend,
-                                   .amplitude = cgm.st.amplitude,
-                                   .period_minutes = cgm.st.period_minutes};
+                cgm_pattern_t p;
+                p.kind = CGM_PATTERN_FIXED;
+                p.value = cgm.st.glucose;
+                p.trend = cgm.st.trend;
+                p.amplitude = cgm.st.amplitude;
+                p.period_minutes = cgm.st.period_minutes;
                 cgm_set_pattern(&cgm, &p);
             });
         }
