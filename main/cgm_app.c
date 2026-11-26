@@ -301,12 +301,19 @@ const char *cgm_app_command(const char *body)
         if (!cgm_pattern_from_name(pname, &kind)) {
             return "pattern is fixed, sine or walk";
         }
-        long value = 120, trend = 0, amplitude = 50, period = 240;
-        if (!json_number(body, "value", &value) && !json_number(body, "glucose", &value)) {
-            return "value is 40 to 400";
+        /* The value is the fixed value, the wave's mean or the walk's target. A
+         * page has not been asked for it yet when that source has never run, so
+         * a request that omits it -- or sends the 0 an empty input reads as --
+         * is not an error: the pattern starts from the reading the sensor has
+         * now, the way trend, amplitude and period start from the pattern
+         * already set. Only a value outside 40 to 400 mg/dL is rejected. */
+        long value = 0, trend = 0, amplitude = 50, period = 240;
+        int sent = json_number(body, "value", &value) || json_number(body, "glucose", &value);
+        if (!sent || value == 0) {
+            LOCKED(value = cgm.st.glucose);
         }
         if (value < 40 || value > 400) {
-            return "value is 40 to 400";
+            return "value is 40 to 400 mg/dL";
         }
         /* Start from what the sensor already has, so switching pattern does not
          * reset parameters the new pattern does not use. */
