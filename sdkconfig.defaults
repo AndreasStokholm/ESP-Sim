@@ -33,3 +33,8 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 CONFIG_MBEDTLS_CHACHA20_C=y
 CONFIG_MBEDTLS_POLY1305_C=y
 CONFIG_MBEDTLS_CHACHAPOLY_C=y
+
+# The socket pool: httpd needs max_open_sockets + 3, the DNS responder 1, and a
+# phone that joins the access point opens a burst of probes at once. The default
+# 10 left nothing spare, so accept() failed with ENFILE.
+CONFIG_LWIP_MAX_SOCKETS=32

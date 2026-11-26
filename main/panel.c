@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "captive.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -22,6 +23,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "pages.h"
 
 static const char *TAG = "panel";
 static dash_pod_t *the_pod;
@@ -39,9 +41,10 @@ extern const char panel_html_end[] asm("_binary_panel_html_end");
 
 static int sta_failures;
 static bool ap_started;
+static bool sta_joined;
 static bool sntp_started;
 
-static void ap_credentials(char ssid[33], char pass[17])
+void panel_ap_credentials(char ssid[33], char pass[17])
 {
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
@@ -56,7 +59,7 @@ static void start_ap(void)
     }
     ap_started = true;
     char ssid[33], pass[17];
-    ap_credentials(ssid, pass);
+    panel_ap_credentials(ssid, pass);
     wifi_config_t ap = {0};
     memcpy(ap.ap.ssid, ssid, strlen(ssid));
     ap.ap.ssid_len = (uint8_t)strlen(ssid);
@@ -68,7 +71,9 @@ static void start_ap(void)
     esp_wifi_get_mode(&mode);
     esp_wifi_set_mode(mode == WIFI_MODE_STA ? WIFI_MODE_APSTA : WIFI_MODE_AP);
     esp_wifi_set_config(WIFI_IF_AP, &ap);
-    ESP_LOGW(TAG, "access point \"%s\", password \"%s\": control panel at http://192.168.4.1/", ssid, pass);
+    dns_start();
+    ESP_LOGW(TAG, "access point \"%s\", password \"%s\": control panel at http://192.168.4.1/, "
+                  "Wi-Fi setup at http://192.168.4.1/setup", ssid, pass);
 }
 
 static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -76,14 +81,21 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        sta_joined = false;
         if (++sta_failures == 5) {
             ESP_LOGW(TAG, "could not join the saved network: starting the access point too");
             start_ap();
         }
         esp_wifi_connect();
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STOP) {
+        if (ap_started) {
+            ap_started = false;
+            dns_stop();
+        }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         sta_failures = 0;
+        sta_joined = true;
         ESP_LOGW(TAG, "control panel at http://" IPSTR "/", IP2STR(&e->ip_info.ip));
         if (!sntp_started) {
             sntp_started = true;
@@ -93,11 +105,25 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
     }
 }
 
+/* The URI the access point advertises as RFC 8910 DHCP option 114, so a phone
+ * joining it knows there is a portal here instead of inferring one from a
+ * probe. The DHCP server keeps the pointer rather than copying it, so this
+ * lives at file scope. */
+static const char portal_uri[] = "http://192.168.4.1/setup";
+
 static void wifi_start(void)
 {
     ESP_ERROR_CHECK(esp_netif_init());
     esp_netif_create_default_wifi_sta();
-    esp_netif_create_default_wifi_ap();
+    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
+    /* The DHCP server refuses option 114 once it runs, so it goes in here, before
+     * esp_wifi_start(): the server starts with the AP and only then. */
+    esp_err_t err = esp_netif_dhcps_option(ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI,
+                                           (void *)portal_uri, strlen(portal_uri));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "no DHCP option 114 (%s): the portal falls back to the probes",
+                 esp_err_to_name(err));
+    }
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
@@ -118,6 +144,16 @@ static void wifi_start(void)
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
+bool panel_sta_joined(void)
+{
+    return sta_joined;
+}
+
+bool panel_ap_active(void)
+{
+    return ap_started;
+}
+
 /* ---- HTTP -------------------------------------------------------------------- */
 
 static esp_err_t send_status(httpd_req_t *req)
@@ -134,6 +170,11 @@ static esp_err_t send_status(httpd_req_t *req)
 
 static esp_err_t get_index(httpd_req_t *req)
 {
+    /* The exact "/" route wins before the catch-all, so the portal's AP-mode
+     * redirect has to happen here. */
+    if (captive_action(req, req->uri, "GET") == PORTAL_REDIRECT_SETUP) {
+        return captive_redirect_setup(req);
+    }
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, panel_html_start, panel_html_end - panel_html_start);
 }
@@ -239,9 +280,9 @@ static esp_err_t send_ypso(httpd_req_t *req)
 }
 
 static void restart(void *arg);
-static void restart_soon(void);
+void panel_restart_soon(void);
 
-static esp_err_t post_ypso(httpd_req_t *req)
+esp_err_t panel_post_ypso(httpd_req_t *req)
 {
     char body[256];
     if (read_body(req, body, sizeof body) < 0) {
@@ -299,7 +340,7 @@ static esp_err_t post_ypso(httpd_req_t *req)
         }
         store_save_pump((uint8_t)pump);
         httpd_resp_sendstr(req, "{\"restarting\":true}");
-        restart_soon();
+        panel_restart_soon();
         return ESP_OK;
     }
     char *reply = malloc(2400);
@@ -384,7 +425,7 @@ static esp_err_t post_patch(httpd_req_t *req)
      * the phone loses its in-flight command and finds the base again. */
     char cmd[32];
     if (json_string(body, "command", cmd, sizeof cmd) && strcmp(cmd, "medtrumCrash") == 0) {
-        restart_soon();
+        panel_restart_soon();
         return send_patch(req);
     }
     const char *err = medtrum_app_command(body);
@@ -400,7 +441,7 @@ static void restart(void *arg)
     esp_restart();
 }
 
-static void restart_soon(void)
+void panel_restart_soon(void)
 {
     static esp_timer_handle_t t;
     const esp_timer_create_args_t args = {.callback = restart, .name = "restart"};
@@ -410,7 +451,7 @@ static void restart_soon(void)
     esp_timer_start_once(t, 1000 * 1000);
 }
 
-static esp_err_t post_wifi(httpd_req_t *req)
+static esp_err_t save_wifi(httpd_req_t *req, bool dismiss)
 {
     char body[256], ssid[33], pass[65];
     if (read_body(req, body, sizeof body) < 0 || !json_string(body, "ssid", ssid, sizeof ssid) ||
@@ -423,9 +464,23 @@ static esp_err_t post_wifi(httpd_req_t *req)
         return ESP_OK;
     }
     store_save_wifi(ssid, pass);
+    if (dismiss) {
+        captive_set_dismissed(req);
+    }
     httpd_resp_sendstr(req, "saved; restarting\n");
-    restart_soon();
+    panel_restart_soon();
     return ESP_OK;
+}
+
+esp_err_t panel_post_wifi(httpd_req_t *req)
+{
+    return save_wifi(req, false);
+}
+
+esp_err_t panel_post_setup_wifi(httpd_req_t *req)
+{
+    /* /setup/wifi also dismisses the sheet, but only once the body is valid. */
+    return save_wifi(req, true);
 }
 
 void panel_start(dash_pod_t *pod)
@@ -436,14 +491,25 @@ void panel_start(dash_pod_t *pod)
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 12288; /* the YpsoPump's key export: PBKDF2 and AES-GCM */
-    cfg.max_uri_handlers = 16;
+    /* httpd needs max_open_sockets + 3 sockets, and a phone joining the access
+     * point opens a burst of parallel probes (all DNS-hijacked to this board).
+     * With the default 7 the pool ran out and accept() failed with ENFILE.
+     * CONFIG_LWIP_MAX_SOCKETS=32 leaves room for these, the DNS responder and
+     * the rest of the app; LRU purge closes the oldest idle session rather
+     * than refusing a new one. */
+    cfg.max_open_sockets = 12;
+    cfg.lru_purge_enable = true;
+    /* 14 routes here, 6 settings, 3 pump and 4 captive (the last is the wildcard
+     * catch-all): 27, with headroom. */
+    cfg.max_uri_handlers = 32;
+    cfg.uri_match_fn = httpd_uri_match_wildcard; /* for the portal's catch-all */
     httpd_handle_t server = NULL;
     ESP_ERROR_CHECK(httpd_start(&server, &cfg));
     const httpd_uri_t routes[] = {
         {.uri = "/", .method = HTTP_GET, .handler = get_index},
         {.uri = "/status", .method = HTTP_GET, .handler = send_status},
         {.uri = "/command", .method = HTTP_POST, .handler = post_command},
-        {.uri = "/wifi", .method = HTTP_POST, .handler = post_wifi},
+        {.uri = "/wifi", .method = HTTP_POST, .handler = panel_post_wifi},
         {.uri = "/cgm", .method = HTTP_GET, .handler = get_cgm_page},
         {.uri = "/g7", .method = HTTP_GET, .handler = redirect_g7},
         {.uri = "/cgm/status", .method = HTTP_GET, .handler = send_cgm_status},
@@ -451,11 +517,15 @@ void panel_start(dash_pod_t *pod)
         {.uri = "/cgm/command", .method = HTTP_POST, .handler = post_cgm_command},
         {.uri = "/g7/command", .method = HTTP_POST, .handler = post_cgm_command},
         {.uri = "/ypso", .method = HTTP_GET, .handler = send_ypso},
-        {.uri = "/ypso", .method = HTTP_POST, .handler = post_ypso},
+        {.uri = "/ypso", .method = HTTP_POST, .handler = panel_post_ypso},
         {.uri = "/patch", .method = HTTP_GET, .handler = send_patch},
         {.uri = "/patch", .method = HTTP_POST, .handler = post_patch},
     };
     for (size_t i = 0; i < sizeof routes / sizeof routes[0]; i++) {
         httpd_register_uri_handler(server, &routes[i]);
+    }
+    esp_err_t err = pages_register(server);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "registering the pages: %s", esp_err_to_name(err));
     }
 }

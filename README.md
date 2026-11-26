@@ -72,6 +72,71 @@ last save, so it loses the time the board was off. The pod reports its
 activation time in the zone set in `idf.py menuconfig` → *ESP-Sim DASH pod*
 (UTC by default).
 
+## Pages
+
+The board serves a small set of pages. `/` and `/cgm` share one document and one
+nav; `/pump` and `/settings` are their own pages.
+
+| Page | What it is | Aliases |
+|---|---|---|
+| `/` | Home: what is simulated right now (the pump and the CGM, with each one's status), the firmware card and the pod's comms counters | |
+| `/cgm` | The CGM page: the sensor selector, the sensor's own box (pairing code, states) and the glucose source with its settings (the same file as `/`) | `/g7` -> `/cgm` |
+| `/pump` | The pump page: simulator selector and the pod, YpsoPump or Medtrum controls | `/pod`, `/medtrum` -> `/pump` |
+| `/settings` | Network, clock, firmware and reboot | |
+| `/setup` | The captive portal's Wi-Fi-or-skip sheet | |
+
+The JSON and form endpoints keep the panel's names: `GET /status` and
+`POST /command` for the pod, `GET /ypso` and `POST /ypso` for the YpsoPump,
+`GET /patch` and `POST /patch` for the Medtrum base, and the CGM's
+`/cgm/status` and `/cgm/command`. `GET /settings/status` is what the settings
+page polls; `POST /settings/wifi` behaves like `/wifi`, `POST /settings/forget`
+clears the saved network, `POST /settings/reboot` restarts, and
+`POST /settings/pump` is the `pumpSelect` switch the pump page posts.
+`POST /setup/wifi` saves the same network as `/wifi`, and
+`POST /setup/dismiss` sets the dismissal cookie.
+
+## Captive portal
+
+With no saved network (or after the saved one cannot be reached), the board
+runs its own access point and answers the OS connectivity probes so the phone
+shows the setup sheet:
+
+- **Before dismissal:** Apple's `/hotspot-detect.html` and
+  `/library/test/success.html` get the sheet itself; Android's `/generate_204`
+  and `/gen_204`, Windows' `/connecttest.txt` and `/ncsi.txt`, and `/fwlink`
+  answer `302` to `/setup`; `/` also redirects to `/setup`.
+- **Dismissal:** `POST /setup/dismiss` sets
+  `setup=done; Path=/; Max-Age=604800`. A successful join (`POST /setup/wifi`)
+  sets the same cookie. The cookie is browser state only; the board keeps no
+  server-side "dismissed" flag.
+- **After dismissal, or with a joined network:** Apple gets `Success`, Android
+  gets `204` with no body, Windows gets `Microsoft Connect Test` or
+  `Microsoft NCSI`, and `/` serves the panel. `GET /setup` still serves the
+  sheet directly.
+- **Unknown app paths:** they fall through to the same portal handler, which
+  answers `404`. The `/*` catch-all is registered last, so it never shadows a
+  page.
+
+A DNS responder listens on UDP 53 while the AP runs. Every A query is answered
+with the AP address `192.168.4.1`, so any name the phone asks for lands on the
+board; other query types get a NOERROR/no-record answer. It starts and stops
+with the access point.
+
+The access point also offers RFC 8910 DHCP option 114
+(`ESP_NETIF_CAPTIVEPORTAL_URI`, `http://192.168.4.1/setup`), so a phone that
+knows the option is told there is a portal here instead of inferring it from a
+probe. It is set before the DHCP server starts, which is the only time it is
+accepted; if the call fails the board logs it and the probes still apply.
+
+The socket budget has to cover the probe burst: every probe target
+resolves to this board, so a joining phone opens many connections at once.
+`sdkconfig.defaults` sets `CONFIG_LWIP_MAX_SOCKETS=32`, the panel runs 12 open
+HTTP sessions with the LRU purge on, and the DNS responder holds one more. The
+default pool of 10 -- exactly httpd's `max_open_sockets` 7 plus its 3 internal
+-- left nothing spare and `accept()` failed with `ENFILE`, which looks like
+`E (…) httpd: httpd_accept_conn: error in accept (23)` in the log and means the
+portal never answers the probe.
+
 ## Differences from the Go simulator
 
 - **Deactivating** the pod from the app makes the board a new, unpaired pod.
@@ -95,6 +160,7 @@ is kept byte for byte: see the tests.
 |---|---|
 | `components/cgmsim/` | The simulated Dexcom G6 transmitter and G7 sensor, and the virtual person (`person.c`), as portable C |
 | `components/ypsosim/` | The simulated YpsoPump, as portable C |
+| `components/portalsim/` | The captive-portal request decision, as portable C |
 | `components/dashpod/` | The pod, as portable C: crypto (AES-CCM, CMAC, X25519, Milenage; AES, SHA-256 and P-256 from mbedTLS), messages, link layer, pairing (DASH and Omnipod 5), EAP-AKA, commands, responses, state machine |
 | `main/` | The ESP32 side: NimBLE GATT and advertising for both devices (`ble.c`), the CGM's clock and commands (`cgm_app.c`), NVS (`store.c`), Wi-Fi and the HTTP panel (`panel.c`, `panel.html`) |
 | `test/host/` | Host tests (macOS) |
@@ -117,6 +183,16 @@ from ESP-IDF's copy. They check:
   (`tools/golden/gen.sh` regenerates it from the pinned upstream commit);
 - a whole run against a simulated phone: pairing, a session, commands,
   control-panel faults, a reconnect, a bad message, and deactivation.
+
+The portal and DNS lanes are separate: they need neither mbedTLS nor ESP-IDF,
+so they build with plain `cc`.
+
+| Lane | Command | Covers |
+|---|---|---|
+| Core, CGM, YpsoPump (default) | `make -C test/host` | The pod core and the CGM/YpsoPump state machines |
+| Medtrum | `make -C test/host medtrum` | The Medtrum patch, delivery draw and serial helpers |
+| Captive portal | `make -C test/host portal` | The portal decision matrix: Apple/Android/Windows probes, `/fwlink`, root and cookie, `/setup`, methods, NULL inputs |
+| DNS | `make -C test/host dns` | The DNS answer builder: compression pointer, trailing dot, non-A, truncated query, echoed id |
 
 ## Omnipod 5
 
