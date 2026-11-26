@@ -101,10 +101,10 @@ With no saved network (or after the saved one cannot be reached), the board
 runs its own access point and answers the OS connectivity probes so the phone
 shows the setup sheet:
 
-- **Before dismissal:** Apple's `/hotspot-detect.html` gets the sheet itself;
-  Android's `/generate_204` and `/gen_204`, Windows' `/connecttest.txt` and
-  `/ncsi.txt`, and `/fwlink` answer `302` to `/setup`; `/` also redirects to
-  `/setup`.
+- **Before dismissal:** Apple's `/hotspot-detect.html` and
+  `/library/test/success.html` get the sheet itself; Android's `/generate_204`
+  and `/gen_204`, Windows' `/connecttest.txt` and `/ncsi.txt`, and `/fwlink`
+  answer `302` to `/setup`; `/` also redirects to `/setup`.
 - **Dismissal:** `POST /setup/dismiss` sets
   `setup=done; Path=/; Max-Age=604800`. A successful join (`POST /setup/wifi`)
   sets the same cookie. The cookie is browser state only; the board keeps no
@@ -121,6 +121,21 @@ A DNS responder listens on UDP 53 while the AP runs. Every A query is answered
 with the AP address `192.168.4.1`, so any name the phone asks for lands on the
 board; other query types get a NOERROR/no-record answer. It starts and stops
 with the access point.
+
+The access point also offers RFC 8910 DHCP option 114
+(`ESP_NETIF_CAPTIVEPORTAL_URI`, `http://192.168.4.1/setup`), so a phone that
+knows the option is told there is a portal here instead of inferring it from a
+probe. It is set before the DHCP server starts, which is the only time it is
+accepted; if the call fails the board logs it and the probes still apply.
+
+The socket budget has to cover the probe burst: every probe target
+resolves to this board, so a joining phone opens many connections at once.
+`sdkconfig.defaults` sets `CONFIG_LWIP_MAX_SOCKETS=32`, the panel runs 12 open
+HTTP sessions with the LRU purge on, and the DNS responder holds one more. The
+default pool of 10 -- exactly httpd's `max_open_sockets` 7 plus its 3 internal
+-- left nothing spare and `accept()` failed with `ENFILE`, which looks like
+`E (…) httpd: httpd_accept_conn: error in accept (23)` in the log and means the
+portal never answers the probe.
 
 ## Differences from the Go simulator
 

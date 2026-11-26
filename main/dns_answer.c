@@ -89,7 +89,12 @@ size_t dns_build_reply(const uint8_t *query, size_t query_len, uint8_t *reply, s
     for (size_t i = 0; i < question_end; i++) {
         reply[i] = query[i];
     }
-    reply[2] |= 0x80; /* QR: this is a response */
+    /* QR: this is a response; RD stays as the query set it. RA: we do answer
+     * every name, so a resolver that asked with RD set has no reason to discard
+     * the reply as "not recursive". AA and TC stay clear, RCODE is 0. */
+    reply[2] |= 0x80;
+    reply[2] &= (uint8_t)~0x04;
+    reply[3] = 0x80;
     put_u16(reply + 4, questions);    /* qdcount */
     put_u16(reply + 6, (uint16_t)answers); /* ancount */
     put_u16(reply + 8, 0);            /* nscount */

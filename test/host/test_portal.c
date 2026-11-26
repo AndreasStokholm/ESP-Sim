@@ -30,8 +30,9 @@ static void test_apple(void)
     want(PORTAL_PROBE_APPLE_SUCCESS, "/hotspot-detect.html", "GET", 0, 1);
     want(PORTAL_PROBE_APPLE_SUCCESS, "/hotspot-detect.html", "GET", 1, 1);
 
-    want(PORTAL_PROBE_APPLE_SUCCESS, "/library/test/success.html", "GET", 0, 0);
-    want(PORTAL_PROBE_APPLE_SUCCESS, "/library/test/success.html?cache=1", "GET", 1, 0);
+    want(PORTAL_PROBE_APPLE_HTML, "/library/test/success.html", "GET", 0, 0);
+    want(PORTAL_PROBE_APPLE_SUCCESS, "/library/test/success.html", "GET", 1, 0);
+    want(PORTAL_PROBE_APPLE_SUCCESS, "/library/test/success.html?cache=1", "GET", 0, 1);
 }
 
 static void test_android(void)

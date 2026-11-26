@@ -105,11 +105,25 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
     }
 }
 
+/* The URI the access point advertises as RFC 8910 DHCP option 114, so a phone
+ * joining it knows there is a portal here instead of inferring one from a
+ * probe. The DHCP server keeps the pointer rather than copying it, so this
+ * lives at file scope. */
+static const char portal_uri[] = "http://192.168.4.1/setup";
+
 static void wifi_start(void)
 {
     ESP_ERROR_CHECK(esp_netif_init());
     esp_netif_create_default_wifi_sta();
-    esp_netif_create_default_wifi_ap();
+    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
+    /* The DHCP server refuses option 114 once it runs, so it goes in here, before
+     * esp_wifi_start(): the server starts with the AP and only then. */
+    esp_err_t err = esp_netif_dhcps_option(ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI,
+                                           (void *)portal_uri, strlen(portal_uri));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "no DHCP option 114 (%s): the portal falls back to the probes",
+                 esp_err_to_name(err));
+    }
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
@@ -477,6 +491,14 @@ void panel_start(dash_pod_t *pod)
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 12288; /* the YpsoPump's key export: PBKDF2 and AES-GCM */
+    /* httpd needs max_open_sockets + 3 sockets, and a phone joining the access
+     * point opens a burst of parallel probes (all DNS-hijacked to this board).
+     * With the default 7 the pool ran out and accept() failed with ENFILE.
+     * CONFIG_LWIP_MAX_SOCKETS=32 leaves room for these, the DNS responder and
+     * the rest of the app; LRU purge closes the oldest idle session rather
+     * than refusing a new one. */
+    cfg.max_open_sockets = 12;
+    cfg.lru_purge_enable = true;
     /* 14 routes here, 6 settings, 3 pump and 4 captive (the last is the wildcard
      * catch-all): 27, with headroom. */
     cfg.max_uri_handlers = 32;

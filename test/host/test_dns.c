@@ -57,6 +57,8 @@ static void test_a(void)
     CHECK(rlen == qlen + 16);
     CHECK(r[0] == 0x12 && r[1] == 0x34); /* id echoed */
     CHECK((r[2] & 0x80) != 0);           /* QR */
+    CHECK(r[2] == 0x81);                 /* QR set, RD echoed, AA clear */
+    CHECK(r[3] == 0x80);                 /* RA set, RCODE 0 */
     CHECK(r[4] == 0 && r[5] == 1);       /* qdcount */
     CHECK(r[6] == 0 && r[7] == 1);       /* ancount */
     CHECK(r[8] == 0 && r[9] == 0 && r[10] == 0 && r[11] == 0);
@@ -94,6 +96,8 @@ static void test_non_a(void)
     CHECK(rlen == qlen);                 /* NOERROR, no record */
     CHECK(r[0] == 0x43 && r[1] == 0x21);
     CHECK((r[2] & 0x80) != 0);
+    CHECK(r[2] == 0x81);
+    CHECK(r[3] == 0x80);
     CHECK(r[4] == 0 && r[5] == 1);
     CHECK(r[6] == 0 && r[7] == 0);       /* ancount */
     CHECK(memcmp(r + 12, q + 12, qlen - 12) == 0);

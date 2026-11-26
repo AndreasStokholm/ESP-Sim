@@ -76,7 +76,11 @@ static esp_err_t post_setup_dismiss(httpd_req_t *req)
 static esp_err_t portal_catch_all(httpd_req_t *req)
 {
     const char *method = req->method == HTTP_GET ? "GET" : "OTHER";
-    switch (captive_action(req, req->uri, method)) {
+    const PortalAction action = captive_action(req, req->uri, method);
+    /* What the phone probed and what it got: the only trace of the OS probe on
+     * the board, and the first thing to look at when a sheet does not open. */
+    ESP_LOGI(TAG, "%s %s -> %s", method, req->uri, portalActionName(action));
+    switch (action) {
     case PORTAL_SERVE_SETUP:
     case PORTAL_PROBE_APPLE_HTML:
         return send_setup_sheet(req);

@@ -59,8 +59,10 @@ PortalAction portalDecide(const char *path, const char *method, int wifiSaved, i
         if (path_is(path, "/hotspot-detect.html")) {
             return noPortal ? PORTAL_PROBE_APPLE_SUCCESS : PORTAL_PROBE_APPLE_HTML;
         }
+        /* The older Apple probe. Treating it as "Success" before dismissal
+         * tells the client there is no portal and the sheet never opens. */
         if (path_is(path, "/library/test/success.html")) {
-            return PORTAL_PROBE_APPLE_SUCCESS;
+            return noPortal ? PORTAL_PROBE_APPLE_SUCCESS : PORTAL_PROBE_APPLE_HTML;
         }
         if (path_is(path, "/generate_204") || path_is(path, "/gen_204")) {
             return noPortal ? PORTAL_PROBE_ANDROID_204 : PORTAL_PROBE_ANDROID_REDIRECT;
