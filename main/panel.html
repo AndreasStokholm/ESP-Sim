@@ -49,12 +49,18 @@
   .seg button.active { background:var(--accent); border-color:var(--accent); color:#0b0d10; font-weight:600; }
   .subbox { margin-top:14px; padding:12px; border:1px solid var(--line); border-radius:9px; }
   .subbox h3 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--mut); margin:0 0 8px; }
+  .toast { position:fixed; left:50%; top:14px; transform:translateX(-50%); z-index:20; max-width:min(92vw,640px);
+           background:var(--accent); color:#0b0d10; font-weight:600; padding:11px 18px; border-radius:9px;
+           box-shadow:0 6px 24px rgba(0,0,0,.45); opacity:0; pointer-events:none; transition:opacity .12s; }
+  .toast.show { opacity:1; }
+  .toast.bad { background:var(--bad); color:#fff; }
   [hidden] { display:none !important; }
   body.cgm-page .page-home { display:none !important; }
   body:not(.cgm-page) .page-cgm { display:none !important; }
 </style>
 </head>
 <body>
+<div class="toast" id="toast" role="status" aria-live="assertive"></div>
 <nav>
   <span class="brand">ESP-Sim</span>
   <a href="/" id="navHome">Home</a>
@@ -236,9 +242,6 @@
 
     <div class="muted" style="margin-top:12px">A reading every 5 minutes.</div>
   </section>
-
-  <div class="muted page-home" id="msg" role="status" aria-live="polite"></div>
-  <div class="muted page-cgm" id="cmsg" role="status" aria-live="polite"></div>
 </main>
 <footer>For development use only — not an Insulet product. The pumps simulate delivery and the CGM makes up its readings; never use either for therapy.</footer>
 <script>
@@ -247,8 +250,17 @@ const cgmPage = location.pathname === '/cgm' || location.pathname === '/g7';
 if(cgmPage){ document.body.classList.add('cgm-page'); document.title = 'CGM | ESP-Sim'; $('navCgm').classList.add('active'); }
 else { $('navHome').classList.add('active'); }
 
-function say(t){ const el = cgmPage ? $('cmsg') : $('msg'); if(!el) return; el.textContent=t;
-  if(t) setTimeout(()=>{ if(el.textContent===t) el.textContent=''; }, 4000); }
+/* What the page says back goes in a toast at the top, the way the pump page does
+ * it: a failure that lands mid-page reads like content and is easy to miss. */
+let toastTimer = 0;
+function say(t, bad){
+  const el = $('toast');
+  if(!el) return;
+  clearTimeout(toastTimer);
+  el.textContent = t || '';
+  el.className = 'toast' + (t ? ' show' : '') + (bad && t ? ' bad' : '');
+  if(t) toastTimer = setTimeout(()=>{ el.className = 'toast'; }, bad ? 6000 : 4000);
+}
 
 /* ---- home: the overview, the firmware box and the comms counters ---- */
 const PATCH_STATES = {0:'none',1:'idle',2:'filled',3:'priming',4:'primed',5:'ejecting',6:'ejected',
@@ -312,7 +324,7 @@ async function refreshBoard(){
   } catch(e) {}
 }
 
-async function reboot(){ try { const r = await fetch('/settings/reboot',{method:'POST'}); if(!r.ok) throw new Error((await r.text()).trim()); say('Rebooting…'); } catch(e){ say('Failed — '+e.message); } }
+async function reboot(){ try { const r = await fetch('/settings/reboot',{method:'POST'}); if(!r.ok) throw new Error((await r.text()).trim()); say('Rebooting…'); } catch(e){ say('Failed — '+e.message, true); } }
 $('reboot').onclick = ()=>{ if(confirm('Reboot the board? It comes back with the same state.')) reboot(); };
 
 /* ---- CGM ---- */
@@ -328,7 +340,7 @@ async function cgmSend(body, done){
     const t = await r.text();
     if(!r.ok) throw new Error(t.trim());
     showCgm(JSON.parse(t)); say(done);
-  } catch(e){ say('Failed — '+e.message); }
+  } catch(e){ say('Failed — '+e.message, true); }
 }
 
 /* The header box: pick the simulator. Starting a sensor uses the pairing code
@@ -349,14 +361,21 @@ $('cgmStateSet').onclick = ()=>{ cgmEdited.cgmStateIn=false; cgmSend({command:'c
 $('cgmSkip').onclick = ()=>cgmSend({command:'cgmSkipWarmup'}, 'Warm-up skipped');
 $('cgmLoss').onchange = ()=>cgmSend({command:'cgmSignalLoss', on:$('cgmLoss').checked}, $('cgmLoss').checked ? 'Signal lost' : 'Signal back');
 
+/* A box the reader has not filled in sends no value at all, so the board starts
+ * that source from the reading it has now, instead of rejecting the 0 an empty
+ * box reads as. */
+const boxNum = id => { const v = $(id).value.trim(); return v==='' ? null : Math.round(+v); };
+const putNum = (body, key, id) => { const v = boxNum(id); if(v!==null) body[key] = v; };
+
 /* The source box: the four ways to make glucose, each with its own settings. */
 document.querySelectorAll('#cgmModeSel button').forEach(b=>b.onclick=()=>{
   const m = b.dataset.mode;
   if(m==='person'){ sendPerson(); return; }
   const body = {command:'cgmSetPattern', pattern:m};
-  if(m==='fixed'){ body.value = Math.round(+$('cgmGlucoseIn').value); body.trend = Math.round(+$('cgmTrendIn').value*10); }
-  if(m==='sine'){ body.value = Math.round(+$('cgmMeanIn').value); body.amplitude = Math.round(+$('cgmAmplitudeIn').value); body.periodMinutes = Math.round(+$('cgmPeriodIn').value); }
-  if(m==='walk'){ body.value = Math.round(+$('cgmWalkIn').value); }
+  if(m==='fixed'){ putNum(body, 'value', 'cgmGlucoseIn');
+    const tr = $('cgmTrendIn').value.trim(); if(tr !== '') body.trend = Math.round(+tr*10); }
+  if(m==='sine'){ putNum(body, 'value', 'cgmMeanIn'); putNum(body, 'amplitude', 'cgmAmplitudeIn'); putNum(body, 'periodMinutes', 'cgmPeriodIn'); }
+  if(m==='walk'){ putNum(body, 'value', 'cgmWalkIn'); }
   cgmSend(body, 'Now simulating '+m);
 });
 function sendPerson(){
@@ -368,11 +387,18 @@ $('cgmPersonSet').onclick = ()=>{ ['cgmSourceIn','cgmIsfIn','cgmIcrIn','cgmBasal
   cgmSend({command:'cgmPattern', pattern:1, source:+$('cgmSourceIn').value,
     isf:Math.round(+$('cgmIsfIn').value), icr:Math.round(+$('cgmIcrIn').value), basalNeed:Math.round(+$('cgmBasalIn').value*100)}, 'Applied'); };
 $('cgmFixedSet').onclick = ()=>{ cgmEdited.cgmGlucoseIn=cgmEdited.cgmTrendIn=false;
-  cgmSend({command:'cgmSetPattern', pattern:'fixed', value:Math.round(+$('cgmGlucoseIn').value), trend:Math.round(+$('cgmTrendIn').value*10)}, 'Fixed applied'); };
+  const body = {command:'cgmSetPattern', pattern:'fixed'};
+  putNum(body, 'value', 'cgmGlucoseIn');
+  const tr = $('cgmTrendIn').value.trim(); if(tr !== '') body.trend = Math.round(+tr*10);
+  cgmSend(body, 'Fixed applied'); };
 $('cgmSineSet').onclick = ()=>{ cgmEdited.cgmMeanIn=cgmEdited.cgmAmplitudeIn=cgmEdited.cgmPeriodIn=false;
-  cgmSend({command:'cgmSetPattern', pattern:'sine', value:Math.round(+$('cgmMeanIn').value), amplitude:Math.round(+$('cgmAmplitudeIn').value), periodMinutes:Math.round(+$('cgmPeriodIn').value)}, 'Wave applied'); };
+  const body = {command:'cgmSetPattern', pattern:'sine'};
+  putNum(body, 'value', 'cgmMeanIn'); putNum(body, 'amplitude', 'cgmAmplitudeIn'); putNum(body, 'periodMinutes', 'cgmPeriodIn');
+  cgmSend(body, 'Wave applied'); };
 $('cgmWalkSet').onclick = ()=>{ cgmEdited.cgmWalkIn=false;
-  cgmSend({command:'cgmSetPattern', pattern:'walk', value:Math.round(+$('cgmWalkIn').value)}, 'Walk applied'); };
+  const body = {command:'cgmSetPattern', pattern:'walk'};
+  putNum(body, 'value', 'cgmWalkIn');
+  cgmSend(body, 'Walk applied'); };
 $('cgmSnack').onclick = ()=>cgmSend({command:'cgmEat', grams:20}, 'The person has a snack');
 $('cgmExercise').onclick = ()=>cgmSend({command:'cgmExercise', minutes:45}, 'The person goes for a run');
 
@@ -423,8 +449,11 @@ function showPerson(c){
   if(!cgmEdited.cgmBasalIn && document.activeElement!==$('cgmBasalIn')) $('cgmBasalIn').value = (c.basalNeed/100).toFixed(2);
   if(!cgmEdited.cgmAmplitudeIn && document.activeElement!==$('cgmAmplitudeIn')) $('cgmAmplitudeIn').value = c.amplitude;
   if(!cgmEdited.cgmPeriodIn && document.activeElement!==$('cgmPeriodIn')) $('cgmPeriodIn').value = c.periodMinutes;
-  /* each source keeps its own value: mean for wave, target for walk, value for fixed */
-  if(!cgmEdited.cgmMeanIn && document.activeElement!==$('cgmMeanIn') && kind==='sine') $('cgmMeanIn').value = c.glucose;
+  /* Each source's box holds a pending value: seed it from what the sensor reads
+   * now, so switching to that source has a number to send. While wave is live the
+   * box is left alone -- the reading moves with the wave, the pattern's mean does
+   * not. */
+  if(!cgmEdited.cgmMeanIn && document.activeElement!==$('cgmMeanIn') && kind!=='sine') $('cgmMeanIn').value = c.glucose;
   if(!cgmEdited.cgmGlucoseIn && document.activeElement!==$('cgmGlucoseIn')) $('cgmGlucoseIn').value = c.glucose;
   if(!cgmEdited.cgmTrendIn && document.activeElement!==$('cgmTrendIn')) $('cgmTrendIn').value = c.trend/10;
   if(!cgmEdited.cgmWalkIn && document.activeElement!==$('cgmWalkIn')) $('cgmWalkIn').value = c.glucose;
